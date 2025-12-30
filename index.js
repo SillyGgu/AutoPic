@@ -500,8 +500,15 @@ function updateToggleButtonStyle() {
     const $icon = $('#st_image_toggle_icon');
     const $text = $('#st_image_toggle_text');
     
-    if ($icon.length) $icon.css('color', isActive ? '#4a90e2' : '#eb4d4b');
-    if ($text.length) $text.text(isActive ? '이미지 생성: 활성' : '이미지 생성: 중단됨');
+    if ($icon.length) {
+        $icon.css('color', isActive ? '#4a90e2' : '#eb4d4b');
+    }
+    
+    if ($text.length) {
+        // i18n 속성이 있으면 동적 텍스트 변경을 방해할 수 있으므로 제거
+        $text.removeAttr('data-i18n');
+        $text.text(isActive ? '이미지 생성: 활성' : '이미지 생성: 중단됨');
+    }
 }
 
 async function toggleExtensionStatus() {
@@ -514,9 +521,10 @@ async function toggleExtensionStatus() {
         extension_settings[extensionName].insertType = extension_settings[extensionName].lastNonDisabledType || INSERT_TYPE.INLINE;
         toastr.success(`이미지 자동 생성이 활성화되었습니다 (${extension_settings[extensionName].insertType}).`);
     }
-    updateUI();
-    updateToggleButtonStyle();
     saveSettingsDebounced();
+    updateUI();
+    // UI 업데이트가 확실히 적용되도록 지연 없이 호출
+    updateToggleButtonStyle();
 }
 
 async function handleLastImageReroll() {
@@ -592,8 +600,15 @@ async function handleReroll(mesId, currentPrompt) {
         textMatches = [...message.mes.matchAll(regex)].map(m => m[1]);
     }
     
-    let allPrompts = [...new Set([currentPrompt, ...textMatches])].filter(p => p && String(p).trim().length > 0);
-    if (allPrompts.length === 0) allPrompts = [currentPrompt || ""];
+    // [수정됨] 텍스트 태그가 존재하면 태그 내용만 사용 (중복 방지), 태그가 없으면 현재 이미지 타이틀 사용
+    let allPrompts = [];
+    if (textMatches.length > 0) {
+        allPrompts = [...new Set(textMatches)].filter(p => p && String(p).trim().length > 0);
+    } else {
+        allPrompts = [currentPrompt].filter(p => p && String(p).trim().length > 0);
+    }
+    
+    if (allPrompts.length === 0) allPrompts = [""];
 
     // 2. 상태 저장용 변수
     let selectedIdx = 0;
