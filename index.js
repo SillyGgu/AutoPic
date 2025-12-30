@@ -1,4 +1,4 @@
-// The main script for the extension
+
 import { extension_settings, getContext } from '../../../extensions.js';
 import {
     saveSettingsDebounced,
@@ -12,11 +12,11 @@ import { regexFromString } from '../../../utils.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 
-// 扩展名称과 경로
+
 const extensionName = 'AutoPic';
 const extensionFolderPath = `/scripts/extensions/third-party/${extensionName}`;
 
-// 삽입 유형 상수
+
 const INSERT_TYPE = {
     DISABLED: 'disabled',
     INLINE: 'inline',
@@ -107,7 +107,7 @@ async function loadSettings() {
     updateUI();
 }
 
-// 설정 페이지 생성 및 이벤트 바인딩
+
 async function createSettings(settingsHtml) {
     if (!$('#autopic_settings_container').length) {
         $('#extensions_settings2').append(
@@ -117,7 +117,7 @@ async function createSettings(settingsHtml) {
 
     $('#autopic_settings_container').empty().append(settingsHtml);
 
-    // 탭 전환 로직
+
     $('.image-gen-nav-item').on('click', function() {
         $('.image-gen-nav-item').removeClass('active');
         $(this).addClass('active');
@@ -128,7 +128,7 @@ async function createSettings(settingsHtml) {
         if (targetTabId === 'tab-gen-linking') renderCharacterLinkUI();
     });
 
-    // 기본 설정 이벤트
+
     $('#image_generation_insert_type').on('change', function () {
         extension_settings[extensionName].insertType = $(this).val();
         updateUI();
@@ -146,7 +146,7 @@ async function createSettings(settingsHtml) {
         saveSettingsDebounced();
     });
 
-    // 템플릿 관리 이벤트
+
     $('#prompt_preset_select').on('change', function() {
         const selectedKey = $(this).val();
         const presets = extension_settings[extensionName].promptPresets;
@@ -201,7 +201,7 @@ async function createSettings(settingsHtml) {
         }
     });
 
-    // 캐릭터 연동 이벤트
+
     $('#gen-save-char-link-btn').on('click', onSaveCharLink);
     $('#gen-remove-char-link-btn').on('click', onRemoveCharLink);
     $('#gen-toggle-linked-list-btn').on('click', function() {
@@ -214,7 +214,6 @@ async function createSettings(settingsHtml) {
         }
     });
 
-    // 기타 설정
     $('#prompt_injection_regex').on('input', function () {
         extension_settings[extensionName].promptInjection.regex = $(this).val();
         saveSettingsDebounced();
@@ -257,7 +256,6 @@ function renderCharacterLinkUI() {
         statusHtml += `<strong>연동된 템플릿:</strong> <span style="color: var(--accent-color); font-weight: bold;">${linkedPreset}</span>`;
         $('#gen-remove-char-link-btn').show();
         
-        // 추가: 현재 설정된 프롬프트와 연동된 프롬프트가 다르면 동기화
         const presetContent = extension_settings[extensionName].promptPresets[linkedPreset];
         if (extension_settings[extensionName].promptInjection.prompt !== presetContent) {
             extension_settings[extensionName].promptInjection.prompt = presetContent;
@@ -287,15 +285,12 @@ function onSaveCharLink() {
     const avatarFile = characters[charId].avatar;
     const presetContent = extension_settings[extensionName].promptPresets[presetName];
     
-    // 1. 연동 정보 저장
     extension_settings[extensionName].linkedPresets[avatarFile] = presetName;
     
-    // 2. 현재 활성 프롬프트도 해당 템플릿 내용으로 즉시 교체
     extension_settings[extensionName].promptInjection.prompt = presetContent;
     
-    // 3. UI 동기화
     $('#prompt_injection_text').val(presetContent);
-    updatePresetSelect(); // 드롭다운 선택 상태 업데이트
+    updatePresetSelect(); 
     
     saveSettingsDebounced();
     renderCharacterLinkUI();
@@ -310,7 +305,6 @@ function onRemoveCharLink() {
     const avatarFile = characters[charId].avatar;
     delete extension_settings[extensionName].linkedPresets[avatarFile];
     
-    // 연동 해제 시 현재 텍스트 영역은 유지하되 드롭다운 상태 등만 갱신
     saveSettingsDebounced();
     renderCharacterLinkUI();
     updatePresetSelect();
@@ -378,7 +372,6 @@ function updatePresetSelect() {
     else select.val("");
 }
 
-// 주입할 프롬프트 결정 (연동 우선)
 function getFinalPrompt() {
     const context = getContext();
     const charId = context.characterId;
@@ -396,7 +389,6 @@ function getFinalPrompt() {
     return finalPrompt;
 }
 
-// 监听CHAT_COMPLETION_PROMPT_READY事件以注入提示词
 eventSource.on(
     event_types.CHAT_COMPLETION_PROMPT_READY,
     async function (eventData) {
@@ -406,7 +398,7 @@ eventSource.on(
                 return;
             }
 
-            const prompt = getFinalPrompt(); // 연동된 프롬프트 가져오기
+            const prompt = getFinalPrompt(); 
             const depth = extension_settings[extensionName].promptInjection.depth || 0;
             const role = extension_settings[extensionName].promptInjection.position.replace('deep_', '') || 'system';
 
@@ -446,7 +438,6 @@ $(function () {
     (async function () {
         const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
         
-        // 메뉴 아이템 ID 변경: auto_generation -> autopic_menu_item
         $('#extensionsMenu').append(`<div id="autopic_menu_item" class="list-group-item flex-container flexGap5">
             <div class="fa-solid fa-robot"></div>
             <span data-i18n="AutoPic">AutoPic</span>
@@ -462,6 +453,8 @@ $(function () {
         
         eventSource.on(event_types.MESSAGE_RENDERED, (mesId) => addRerollButtonToMessage(mesId));
         eventSource.on(event_types.MESSAGE_UPDATED, (mesId) => addRerollButtonToMessage(mesId));
+        
+        eventSource.on(event_types.CHAT_CHANGED, () => renderCharacterLinkUI());
 
         $(document).on('click', '.image-reroll-button', function (e) {
             e.preventDefault(); e.stopPropagation();
@@ -475,7 +468,6 @@ $(function () {
     })();
 });
 
-// 요술봉 메뉴 추가
 async function addToWandMenu() {
     try {
         if ($('#st_image_reroll_wand_button').length > 0) return;
@@ -484,7 +476,6 @@ async function addToWandMenu() {
         if (extensionsMenu.length > 0) {
             extensionsMenu.append(buttonHtml);
             
-            // 이벤트 바인딩
             $("#st_image_reroll_wand_button").off('click').on("click", () => handleLastImageReroll());
             $("#st_image_toggle_active_button").off('click').on("click", () => toggleExtensionStatus());
             
@@ -505,7 +496,6 @@ function updateToggleButtonStyle() {
     }
     
     if ($text.length) {
-        // i18n 속성이 있으면 동적 텍스트 변경을 방해할 수 있으므로 제거
         $text.removeAttr('data-i18n');
         $text.text(isActive ? '이미지 생성: 활성' : '이미지 생성: 중단됨');
     }
@@ -523,7 +513,6 @@ async function toggleExtensionStatus() {
     }
     saveSettingsDebounced();
     updateUI();
-    // UI 업데이트가 확실히 적용되도록 지연 없이 호출
     updateToggleButtonStyle();
 }
 
@@ -542,17 +531,14 @@ async function handleLastImageReroll() {
         const message = chat[i];
         if (message.is_user) continue;
 
-        // 이미지가 이미 있는 메시지인 경우
         if (message.extra && (message.extra.image || message.extra.image_swipes)) {
             const currentTitle = message.extra.title || "";
             handleReroll(i, currentTitle);
             return;
         }
 
-        // 텍스트에 태그만 있는 경우
         const match = message.mes.match(imgTagRegex);
         if (match) {
-            // 정규식 결과에서 프롬프트 내용 추출 (첫 번째 매치 사용)
             const cleanMatch = match[0].match(/prompt="([^"]*)"/);
             const initialPrompt = cleanMatch ? cleanMatch[1] : "";
             handleReroll(i, initialPrompt);
@@ -599,8 +585,7 @@ async function handleReroll(mesId, currentPrompt) {
     if (message.mes) {
         textMatches = [...message.mes.matchAll(regex)].map(m => m[1]);
     }
-    
-    // [수정됨] 텍스트 태그가 존재하면 태그 내용만 사용 (중복 방지), 태그가 없으면 현재 이미지 타이틀 사용
+
     let allPrompts = [];
     if (textMatches.length > 0) {
         allPrompts = [...new Set(textMatches)].filter(p => p && String(p).trim().length > 0);
