@@ -38,7 +38,7 @@ function escapeHtmlAttribute(value) {
 }
 
 // 기본 설정
-const defaultSettings = {
+const defaultAutoPicSettings = {
     insertType: INSERT_TYPE.DISABLED,
     lastNonDisabledType: INSERT_TYPE.INLINE, 
     promptInjection: {
@@ -56,7 +56,7 @@ const defaultSettings = {
 
 // UI 업데이트
 function updateUI() {
-    $('#auto_generation').toggleClass(
+    $('#autopic_menu_item').toggleClass(
         'selected',
         extension_settings[extensionName].insertType !== INSERT_TYPE.DISABLED,
     );
@@ -79,12 +79,12 @@ async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
 
     if (Object.keys(extension_settings[extensionName]).length === 0) {
-        Object.assign(extension_settings[extensionName], defaultSettings);
+        Object.assign(extension_settings[extensionName], defaultAutoPicSettings);
     } else {
         if (!extension_settings[extensionName].promptInjection) {
-            extension_settings[extensionName].promptInjection = defaultSettings.promptInjection;
+            extension_settings[extensionName].promptInjection = defaultAutoPicSettings.promptInjection;
         } else {
-            const defaultPromptInjection = defaultSettings.promptInjection;
+            const defaultPromptInjection = defaultAutoPicSettings.promptInjection;
             for (const key in defaultPromptInjection) {
                 if (extension_settings[extensionName].promptInjection[key] === undefined) {
                     extension_settings[extensionName].promptInjection[key] = defaultPromptInjection[key];
@@ -92,13 +92,13 @@ async function loadSettings() {
             }
         }
         if (extension_settings[extensionName].insertType === undefined) {
-            extension_settings[extensionName].insertType = defaultSettings.insertType;
+            extension_settings[extensionName].insertType = defaultAutoPicSettings.insertType;
         }
         if (extension_settings[extensionName].lastNonDisabledType === undefined) {
             extension_settings[extensionName].lastNonDisabledType = INSERT_TYPE.INLINE;
         }
         if (!extension_settings[extensionName].promptPresets) {
-            extension_settings[extensionName].promptPresets = JSON.parse(JSON.stringify(defaultSettings.promptPresets));
+            extension_settings[extensionName].promptPresets = JSON.parse(JSON.stringify(defaultAutoPicSettings.promptPresets));
         }
         if (!extension_settings[extensionName].linkedPresets) {
             extension_settings[extensionName].linkedPresets = {};
@@ -109,13 +109,13 @@ async function loadSettings() {
 
 // 설정 페이지 생성 및 이벤트 바인딩
 async function createSettings(settingsHtml) {
-    if (!$('#image_auto_generation_container').length) {
+    if (!$('#autopic_settings_container').length) {
         $('#extensions_settings2').append(
-            '<div id="image_auto_generation_container" class="extension_container"></div>',
+            '<div id="autopic_settings_container" class="extension_container"></div>',
         );
     }
 
-    $('#image_auto_generation_container').empty().append(settingsHtml);
+    $('#autopic_settings_container').empty().append(settingsHtml);
 
     // 탭 전환 로직
     $('.image-gen-nav-item').on('click', function() {
@@ -430,7 +430,7 @@ async function onExtensionButtonClick() {
     if ($('#rm_extensions_block').hasClass('closedDrawer')) extensionsDrawer.trigger('click');
 
     setTimeout(() => {
-        const container = $('#image_auto_generation_container');
+        const container = $('#autopic_settings_container');
         if (container.length) {
             $('#rm_extensions_block').animate({
                 scrollTop: container.offset().top - $('#rm_extensions_block').offset().top + $('#rm_extensions_block').scrollTop(),
@@ -445,12 +445,14 @@ async function onExtensionButtonClick() {
 $(function () {
     (async function () {
         const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
-        $('#extensionsMenu').append(`<div id="auto_generation" class="list-group-item flex-container flexGap5">
+        
+        // 메뉴 아이템 ID 변경: auto_generation -> autopic_menu_item
+        $('#extensionsMenu').append(`<div id="autopic_menu_item" class="list-group-item flex-container flexGap5">
             <div class="fa-solid fa-robot"></div>
-            <span data-i18n="Image Auto Generation">Image Auto Generation</span>
+            <span data-i18n="AutoPic">AutoPic</span>
         </div>`);
 
-        $('#auto_generation').off('click').on('click', onExtensionButtonClick);
+        $('#autopic_menu_item').off('click').on('click', onExtensionButtonClick);
 
         await loadSettings();
         await addToWandMenu(); 
