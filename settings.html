@@ -1,0 +1,276 @@
+
+
+<div class="inline-drawer">
+    <div class="inline-drawer-toggle inline-drawer-header">
+        <b data-i18n="Image Auto Generation" style="color: #4a90e2;">이미지 자동 생성</b>
+        <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+    </div>
+    <div class="inline-drawer-content" style="padding: 15px; background-color: #1a1a1c; border-radius: 0 0 8px 8px; color: #ffffff;">
+        
+        <!-- 메인 네비게이션 탭 -->
+        <div class="image-gen-nav-container">
+            <div class="image-gen-nav-item active" data-tab="tab-gen-general">⚙️ 기본 설정</div>
+            <div class="image-gen-nav-item" data-tab="tab-gen-templates">🎨 프롬프트 템플릿</div>
+            <div class="image-gen-nav-item" data-tab="tab-gen-linking">🔗 캐릭터 연동</div>
+        </div>
+        
+        <!-- 1. 기본 설정 탭 -->
+        <div id="tab-gen-general" class="image-gen-tab-content active">
+            <div class="image-gen-card">
+                <h3 class="gen-section-title">작동 방식</h3>
+                <div class="flex-container flexnowrap margin-bottom-15" style="align-items: center; gap: 20px;">
+                    <label for="image_generation_insert_type" style="flex-shrink: 0; min-width: 120px;">이미지 삽입 유형</label>
+                    <select id="image_generation_insert_type" class="gen-custom-input flex1">
+                        <option value="inline">현재 메시지에 삽입</option>
+                        <option value="replace">태그 치환 모드</option>
+                        <option value="new">새 메시지로 생성</option>
+                        <option value="disabled">사용 안 함</option>
+                    </select>
+                </div>
+                <div class="flex-container flexnowrap" style="margin-top: 10px;">
+                    <label class="gen-checkbox-label" for="prompt_injection_enabled">
+                        <input type="checkbox" id="prompt_injection_enabled">
+                        <span>프롬프트 주입 활성화</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="image-gen-card">
+                <h3 class="gen-section-title">고급 인젝션 설정</h3>
+                <div style="margin-bottom: 25px;">
+                    <label style="display:block; margin-bottom:5px; margin-top:5px; font-size:0.85rem; color: #cccccc; font-weight: bold;">추출 정규식 (Regex)</label>
+                    <textarea id="prompt_injection_regex" class="gen-custom-input" rows="2" placeholder="예: /<pic[^>]*\sprompt=([^>]*?)>/g"></textarea>
+                </div>
+                <div class="flex-container flexnowrap margin-bottom-15" style="align-items: center; gap: 20px;">
+                    <label style="flex-shrink: 0; min-width: 120px;">주입 위치</label>
+                    <select id="prompt_injection_position" class="gen-custom-input flex1">
+                        <option value="deep_system">System (권장)</option>
+                        <option value="deep_user">User</option>
+                        <option value="deep_assistant">AI Assistant</option>
+                    </select>
+                </div>
+                <div class="flex-container flexnowrap" style="align-items: center; gap: 20px;">
+                    <label style="flex-shrink: 0; min-width: 120px;">주입 깊이 (Depth)</label>
+                    <input id="prompt_injection_depth" class="gen-custom-input" type="number" min="0" max="100" style="width: 80px;">
+                </div>
+            </div>
+        </div>
+
+        <!-- 2. 프롬프트 템플릿 탭 -->
+        <div id="tab-gen-templates" class="image-gen-tab-content">
+            <div class="image-gen-card">
+                <h3 class="gen-section-title">템플릿 관리</h3>
+                <div class="flex-container flexnowrap" style="align-items: center; margin-bottom: 25px; gap: 10px; margin-top: 10px;">
+                    <select id="prompt_preset_select" class="gen-custom-input" style="flex: 1;">
+                        <option value="" disabled selected>-- 템플릿 선택 --</option>
+                    </select>
+                    <button id="save_prompt_preset" class="gen-btn gen-btn-blue" title="저장">
+                        <i class="fa-solid fa-floppy-disk"></i>
+                    </button>
+                    <button id="delete_prompt_preset" class="gen-btn gen-btn-red" title="삭제">
+                        <i class="fa-solid fa-trash"></i>
+                    </button>
+                </div>
+                <div>
+                    <label style="display:block; margin-bottom:10px; font-size:0.85rem; font-weight:bold; color: #4a90e2;">프롬프트 내용</label>
+                    <textarea id="prompt_injection_text" class="gen-custom-input" rows="10" placeholder="AI에게 이미지 태그 생성을 지시하는 프롬프트를 입력하세요."></textarea>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. 캐릭터 연동 탭 -->
+        <div id="tab-gen-linking" class="image-gen-tab-content">
+            <div class="image-gen-card">
+                <h3 class="gen-section-title">🔗 캐릭터별 프롬프트 연동</h3>
+                <p style="font-size: 0.85rem; color: #aaaaaa; margin-bottom: 15px; line-height: 1.4;">
+                    특정 캐릭터에게 특화된 프롬프트 템플릿을 지정할 수 있습니다.
+                </p>
+                
+                <div style="background: #121214; padding: 15px; border-radius: 10px; border: 1px solid #333336; margin-bottom: 15px;">
+                    <div id="gen-char-link-info-area" style="font-size: 0.9rem; line-height: 1.6; color: #eeeeee;">
+                        캐릭터 정보를 불러오는 중...
+                    </div>
+                </div>
+
+                <div class="flex-container flexGap10">
+                    <button id="gen-save-char-link-btn" class="gen-btn gen-btn-blue flex2" style="height: 42px; font-weight: bold;">
+                        <i class="fa-solid fa-link"></i> 현재 캐릭터에 연동
+                    </button>
+                    <button id="gen-remove-char-link-btn" class="gen-btn gen-btn-gray flex1" style="height: 42px;">
+                        연동 해제
+                    </button>
+                </div>
+
+                <div style="margin-top: 15px;">
+                    <button id="gen-toggle-linked-list-btn" class="gen-btn gen-btn-dark" style="width: 100%; justify-content: center;">
+                        📋 연동된 캐릭터 목록 확인
+                    </button>
+                    <div id="gen-linked-char-list-container" style="display: none; margin-top: 10px; max-height: 250px; overflow-y: auto; border: 1px solid #333336; border-radius: 8px; background: #121214;">
+                        <!-- JS에서 렌더링 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
+
+<style>
+/* 탭 디자인 */
+.image-gen-nav-container {
+    display: flex; gap: 5px; margin-bottom: 20px; padding-bottom: 5px;
+    border-bottom: 2px solid #333336;
+}
+.image-gen-nav-item {
+    padding: 10px 16px; cursor: pointer; font-weight: 600; 
+    color: #888888; border-radius: 8px 8px 0 0; 
+    transition: all 0.2s ease; white-space: nowrap; font-size: 0.85rem;
+    background-color: #252529;
+}
+.image-gen-nav-item:hover { 
+    background-color: #303035; 
+    color: #ffffff; 
+}
+.image-gen-nav-item.active { 
+    background-color: #4a90e2; 
+    color: #ffffff; 
+}
+
+/* 카드형 섹션 */
+.image-gen-card {
+    background-color: #252529;
+    padding: 22px;
+    border-radius: 12px;
+    border: 1px solid #333336;
+    margin-bottom: 20px;
+}
+
+.image-gen-tab-content { display: none; }
+.image-gen-tab-content.active { display: block; animation: fadeInGen 0.3s ease-out; }
+
+@keyframes fadeInGen {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.gen-section-title {
+    font-size: 1.05rem; font-weight: bold; margin-bottom: 22px; color: #4a90e2;
+    display: flex; align-items: center; gap: 10px; border: none; margin-top: 0;
+}
+.gen-section-title::after {
+    content: ""; flex-grow: 1; height: 1px; background: #333336;
+}
+
+/* 공통 입력창 스타일 */
+.gen-custom-input {
+    background-color: #121214 !important;
+    color: #ffffff !important;
+    border: 1px solid #444448 !important;
+    border-radius: 8px !important;
+    padding: 8px 12px !important;
+    font-size: 0.9rem !important;
+    outline: none !important;
+    box-sizing: border-box;
+}
+
+/* 드롭다운 곡률 및 화살표 처리 */
+select.gen-custom-input {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    background-image: url("data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23cccccc%22%20stroke-width%3D%222%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C/polyline%3E%3C/svg%3E") !important;
+    background-repeat: no-repeat !important;
+    background-position: right 10px center !important;
+    background-size: 16px !important;
+    padding-right: 40px !important;
+}
+
+.gen-custom-input:focus {
+    border-color: #4a90e2 !important;
+    box-shadow: 0 0 0 2px rgba(74, 144, 226, 0.3);
+}
+textarea.gen-custom-input {
+    width: 100%;
+    resize: vertical;
+    line-height: 1.5;
+}
+
+/* 버튼 스타일 */
+.gen-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    font-size: 0.85rem;
+    transition: filter 0.2s, transform 0.1s;
+    color: #ffffff !important;
+    white-space: nowrap; /* 텍스트 세로 방지 */
+    min-width: fit-content;
+}
+.gen-btn:active { transform: scale(0.97); }
+.gen-btn:hover { filter: brightness(1.2); }
+
+.gen-btn-blue { background-color: #4a90e2 !important; }
+.gen-btn-red { background-color: #eb4d4b !important; }
+.gen-btn-gray { background-color: #4b4b4e !important; }
+.gen-btn-dark { background-color: #121214 !important; border: 1px solid #333336 !important; }
+
+/* 1. 체크박스 디자인 강화 (배경검정 대비) */
+.gen-checkbox-label {
+    display: flex; align-items: center; gap: 12px; cursor: pointer; font-size: 0.95rem; color: #eeeeee;
+}
+.gen-checkbox-label input[type="checkbox"] {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 20px; height: 20px;
+    border: 2px solid #4a90e2; /* 파란색 테두리로 시인성 확보 */
+    border-radius: 4px;
+    background-color: #121214; /* 내부 검정 */
+    cursor: pointer;
+    position: relative;
+    transition: background 0.2s, border-color 0.2s;
+    margin: 0;
+}
+.gen-checkbox-label input[type="checkbox"]:checked {
+    background-color: #4a90e2; /* 체크 시 배경 파란색 */
+    border-color: #4a90e2;
+}
+.gen-checkbox-label input[type="checkbox"]:checked::after {
+    content: '✔';
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    color: white;
+    font-size: 14px;
+    font-weight: bold;
+}
+.gen-checkbox-label input[type="checkbox"]:hover {
+    border-color: #74b9ff;
+}
+
+/* 2. 목록 아이템 레이아웃 및 버튼 수정 */
+.gen-linked-item {
+    display: flex; justify-content: space-between; align-items: center; padding: 14px;
+    border-bottom: 1px solid #252529;
+    gap: 15px;
+}
+.gen-linked-item:last-child { border-bottom: none; }
+.gen-linked-item:hover { background: #1a1a1c; }
+
+.gen-delete-link-btn {
+    padding: 6px 12px !important;
+    height: 32px;
+    font-size: 0.8rem !important;
+    flex-shrink: 0; /* 버튼 압축 방지 */
+}
+
+/* 스크롤바 커스텀 */
+#gen-linked-char-list-container::-webkit-scrollbar { width: 8px; }
+#gen-linked-char-list-container::-webkit-scrollbar-track { background: #121214; }
+#gen-linked-char-list-container::-webkit-scrollbar-thumb { background: #333336; border-radius: 4px; }
+
+.margin-bottom-15 { margin-bottom: 15px !important; }
+</style>

@@ -1,0 +1,10 @@
+{
+    "display_name": "오토픽",
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "author": "anon",
+    "version": "1.0.4",
+    "homePage": "https://github.com/wickedcode01/st-image-auto-generation",
+    "auto_update": true,
+}
