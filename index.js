@@ -449,15 +449,18 @@ $(function () {
             $('head').append(`
             <style id="${styleId}">
                 /* ===============================
-                   1. 중앙 정렬 및 여백 강제 초기화
+                   1. 중앙 정렬 및 여백 확보 (메시지 스와이프 간섭 방지)
                 ================================ */
                 .mes_media_wrapper {
                     display: flex !important;
                     justify-content: center !important;
                     width: 100% !important;
                     padding: 0 !important;
-                    margin: 0 !important;
+                    /* 갤러리 아래쪽으로 충분한 공간 확보 */
+                    margin: 0 0 40px 0 !important; 
                     border: none !important;
+                    box-sizing: border-box !important;
+					border-radius: 12px !important;
                 }
 
                 .mes_media_container {
@@ -466,13 +469,18 @@ $(function () {
                     position: relative !important;
                     width: fit-content !important;
                     max-width: 100% !important;
-                    margin: 10px auto !important; 
-                    padding: 0 !important;     
+                    margin: 10px auto !important;
+                    padding: 0 !important;
                     left: 0 !important;
                     right: 0 !important;
+					overflow: visible !important;
                 }
 
-                /* 기본적으로 컨트롤러 숨김 */
+
+				.mes_media_container img.mes_img,
+				.mes_media_container video {
+					border-radius: 12px !important;
+				}
 				.mes_img_swipes,
 				.mes_img_controls,
 				.mes_video_controls {
@@ -483,7 +491,6 @@ $(function () {
 					transition: opacity 0.15s ease-in-out !important;
 				}
 
-				/* hover 시 혹은 활성화 시 노출 */
 				.mes_media_container:hover .mes_img_controls,
 				.mes_media_container:hover .mes_img_swipes,
 				.mes_media_container.ui-active .mes_img_controls,
@@ -493,7 +500,7 @@ $(function () {
 				}
 
 				/* ===============================
-				   2. 우측 상단 버튼 (아이콘만)
+				   2. 우측 상단 버튼 (아이콘)
 				================================ */
                 .mes_img_controls {
                     display: flex !important;
@@ -534,7 +541,7 @@ $(function () {
 				.mes_img_swipe_left,
 				.mes_img_swipe_right {
 					background: none !important;
-					color: rgba(255,255,255,0.9) !important;
+					color: rgba(255,255,255,0.97) !important;
 					font-size: 18px !important;
 					text-shadow: 0 1px 2px rgba(0,0,0,0.6) !important;
 				}
@@ -549,7 +556,7 @@ $(function () {
 				}
 
 				/* ===============================
-				   4. 모바일 전용 UI 수정 (번호 하단 배치/축소)
+				   4. 모바일 전용 (수정됨)
 				================================ */
                 .mobile-ui-toggle {
                     display: block;
@@ -563,37 +570,39 @@ $(function () {
                     border-radius: 50%;
                     text-align: center;
                     line-height: 30px;
-                    font-size: 18px;
+                    font-size: 15px;
                     cursor: pointer;
                     z-index: 100;
                     opacity: 0.6;
                 }
                 
                 @media (max-width: 1000px) {
-                    /* 페이지 번호 바 위치를 더 내리고 상시 노출 */
+                    .mes_media_wrapper {
+                        margin-bottom: 45px !important;
+                    }
+
                     .mes_img_swipes {
                         opacity: 1 !important;
                         pointer-events: auto !important;
-                        bottom: -15px !important; /* 이미지 밖 하단으로 더 내림 */
+                        z-index: 1000 !important;
                     }
 
-                    /* 페이지 번호 텍스트 크기 축소 */
                     .mes_img_swipe_counter {
-                        font-size: 0.65rem !important; /* 더 작게 수정 */
-                        opacity: 0.7 !important;
+                        font-size: 0.75rem !important;
+                        opacity: 1 !important;
+                        display: block !important;
+                        visibility: visible !important;
                     }
 
-                    /* 화살표 버튼은 클릭 전까지 숨김 */
                     .mes_img_swipe_left, .mes_img_swipe_right {
-                        opacity: 0 !important;
-                        pointer-events: none !important;
+                        opacity: 0.1 !important; 
+                        pointer-events: auto !important;
+                        transition: opacity 0.2s !important;
                     }
 
-                    /* UI 활성화 시 화살표 보임 */
                     .mes_media_container.ui-active .mes_img_swipe_left,
                     .mes_media_container.ui-active .mes_img_swipe_right {
                         opacity: 1 !important;
-                        pointer-events: auto !important;
                     }
                 }
 
@@ -635,7 +644,7 @@ $(function () {
         eventSource.on(event_types.CHAT_CHANGED, () => renderCharacterLinkUI());
 
         /* -------------------------------------------------------
-         * 모바일 전용: 돋보기 차단 및 UI 토글 로직
+         * 모바일 전용: 돋보기 차단 및 UI 토글 로직 (Capture phase)
          * ------------------------------------------------------- */
         document.addEventListener('click', function (e) {
             if (window.innerWidth >= 1000) return;
@@ -664,7 +673,6 @@ $(function () {
             }
         }, true);
 
-        /* 리롤 버튼 실행 로직 */
         $(document).on('click', '.image-reroll-button', function (e) {
             const messageBlock = $(this).closest('.mes');
             const mesId = messageBlock.attr('mesid');
@@ -676,7 +684,6 @@ $(function () {
 
     })();
 });
-
 async function addToWandMenu() {
     try {
         if ($('#st_image_reroll_wand_button').length > 0) return;
@@ -729,7 +736,6 @@ async function handleLastImageReroll() {
     const context = getContext();
     const chat = context.chat;
     
-    // 감지용 정규식들
     const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
     const imgRegex = /<img[^>]*\stitle="([^"]*)"[^>]*?>/g;
 
@@ -745,7 +751,6 @@ async function handleLastImageReroll() {
             return;
         }
 
-        // 2. 태그는 없지만 extra 데이터에 이미지가 있는 경우 (인라인 모드 등)
         if (message.extra && (message.extra.image || message.extra.image_swipes)) {
             const currentTitle = message.extra.title || "";
             handleReroll(i, currentTitle);
