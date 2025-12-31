@@ -443,8 +443,173 @@ async function onExtensionButtonClick() {
 
 $(function () {
     (async function () {
+
+        const styleId = 'autopic-clean-ui-style';
+        if (!$(`#${styleId}`).length) {
+            $('head').append(`
+            <style id="${styleId}">
+                /* ===============================
+                   1. 중앙 정렬 및 여백 강제 초기화
+                ================================ */
+                .mes_media_wrapper {
+                    display: flex !important;
+                    justify-content: center !important;
+                    width: 100% !important;
+                    padding: 0 !important;
+                    margin: 0 !important;
+                    border: none !important;
+                }
+
+                .mes_media_container {
+                    display: flex !important;
+                    justify-content: center !important;
+                    position: relative !important;
+                    width: fit-content !important;
+                    max-width: 100% !important;
+                    margin: 10px auto !important; 
+                    padding: 0 !important;     
+                    left: 0 !important;
+                    right: 0 !important;
+                }
+
+                /* 기본적으로 컨트롤러 숨김 */
+				.mes_img_swipes,
+				.mes_img_controls,
+				.mes_video_controls {
+					background: none !important;
+					box-shadow: none !important;
+					opacity: 0 !important;
+					pointer-events: none !important;
+					transition: opacity 0.15s ease-in-out !important;
+				}
+
+				/* hover 시 혹은 활성화 시 노출 */
+				.mes_media_container:hover .mes_img_controls,
+				.mes_media_container:hover .mes_img_swipes,
+				.mes_media_container.ui-active .mes_img_controls,
+				.mes_media_container.ui-active .mes_img_swipes {
+					opacity: 0.9 !important;
+					pointer-events: auto !important;
+				}
+
+				/* ===============================
+				   2. 우측 상단 버튼 (아이콘만)
+				================================ */
+                .mes_img_controls {
+                    display: flex !important;
+                    flex-direction: row !important;
+                    justify-content: flex-end !important;
+                    gap: 6px !important;
+                    top: -5px !important;
+                    right: 10px !important;
+                    left: auto !important;
+                    width: auto !important;
+                    height: auto !important;
+                }
+
+				.mes_img_controls .right_menu_button {
+					background: none !important;
+					width: 28px !important;
+					height: 28px !important;
+					display: flex !important;
+					align-items: center !important;
+					justify-content: center !important;
+					color: rgba(255,255,255,0.95) !important;
+					font-size: 15px !important;
+					text-shadow: 0 1px 2px rgba(0,0,0,0.6) !important;
+				}
+
+				/* ===============================
+				   3. 하단 중앙 스와이프 (텍스트 중심)
+				================================ */
+				.mes_img_swipes {
+					bottom: 4px !important;
+					left: 50% !important;
+					transform: translateX(-50%) !important;
+					display: flex !important;
+					align-items: center !important;
+					gap: 10px !important;
+				}
+
+				.mes_img_swipe_left,
+				.mes_img_swipe_right {
+					background: none !important;
+					color: rgba(255,255,255,0.9) !important;
+					font-size: 18px !important;
+					text-shadow: 0 1px 2px rgba(0,0,0,0.6) !important;
+				}
+
+				.mes_img_swipe_counter {
+					background: none !important;
+					color: rgba(255,255,255,0.85) !important;
+					font-size: 0.85rem !important;
+					font-weight: 500 !important;
+					min-width: auto !important;
+					text-shadow: 0 1px 2px rgba(0,0,0,0.6) !important;
+				}
+
+				/* ===============================
+				   4. 모바일 전용 UI 수정 (번호 하단 배치/축소)
+				================================ */
+                .mobile-ui-toggle {
+                    display: block;
+                    position: absolute;
+                    top: 5px;
+                    left: 5px;
+                    width: 30px;
+                    height: 30px;
+                    background: rgba(0,0,0,0.5);
+                    color: white;
+                    border-radius: 50%;
+                    text-align: center;
+                    line-height: 30px;
+                    font-size: 18px;
+                    cursor: pointer;
+                    z-index: 100;
+                    opacity: 0.6;
+                }
+                
+                @media (max-width: 1000px) {
+                    /* 페이지 번호 바 위치를 더 내리고 상시 노출 */
+                    .mes_img_swipes {
+                        opacity: 1 !important;
+                        pointer-events: auto !important;
+                        bottom: -15px !important; /* 이미지 밖 하단으로 더 내림 */
+                    }
+
+                    /* 페이지 번호 텍스트 크기 축소 */
+                    .mes_img_swipe_counter {
+                        font-size: 0.65rem !important; /* 더 작게 수정 */
+                        opacity: 0.7 !important;
+                    }
+
+                    /* 화살표 버튼은 클릭 전까지 숨김 */
+                    .mes_img_swipe_left, .mes_img_swipe_right {
+                        opacity: 0 !important;
+                        pointer-events: none !important;
+                    }
+
+                    /* UI 활성화 시 화살표 보임 */
+                    .mes_media_container.ui-active .mes_img_swipe_left,
+                    .mes_media_container.ui-active .mes_img_swipe_right {
+                        opacity: 1 !important;
+                        pointer-events: auto !important;
+                    }
+                }
+
+                @media (min-width: 1000px) {
+                    .mobile-ui-toggle { display: none; }
+                }
+
+				.mes_media_container::after {
+					display: none !important;
+				}
+            </style>
+        `);
+        }
+
         const settingsHtml = await $.get(`${extensionFolderPath}/settings.html`);
-        
+
         $('#extensionsMenu').append(`<div id="autopic_menu_item" class="list-group-item flex-container flexGap5">
             <div class="fa-solid fa-robot"></div>
             <span data-i18n="AutoPic">AutoPic</span>
@@ -453,18 +618,54 @@ $(function () {
         $('#autopic_menu_item').off('click').on('click', onExtensionButtonClick);
 
         await loadSettings();
-        await addToWandMenu(); 
+        await addToWandMenu();
         await createSettings(settingsHtml);
 
         $('#extensions-settings-button').on('click', () => setTimeout(updateUI, 200));
-        
-        eventSource.on(event_types.MESSAGE_RENDERED, (mesId) => addRerollButtonToMessage(mesId));
-        eventSource.on(event_types.MESSAGE_UPDATED, (mesId) => addRerollButtonToMessage(mesId));
-        
+
+        eventSource.on(event_types.MESSAGE_RENDERED, (mesId) => {
+            addRerollButtonToMessage(mesId);
+            addMobileToggleToMessage(mesId);
+        });
+        eventSource.on(event_types.MESSAGE_UPDATED, (mesId) => {
+            addRerollButtonToMessage(mesId);
+            addMobileToggleToMessage(mesId);
+        });
+
         eventSource.on(event_types.CHAT_CHANGED, () => renderCharacterLinkUI());
 
+        /* -------------------------------------------------------
+         * 모바일 전용: 돋보기 차단 및 UI 토글 로직
+         * ------------------------------------------------------- */
+        document.addEventListener('click', function (e) {
+            if (window.innerWidth >= 1000) return;
+
+            const target = e.target;
+            const $mediaContainer = $(target).closest('.mes_media_container');
+            
+            if ($mediaContainer.length === 0) {
+                $('.mes_media_container.ui-active').removeClass('ui-active');
+                return;
+            }
+
+            const isButton = $(target).closest('.mes_img_controls, .mes_img_swipes, .mobile-ui-toggle').length > 0;
+
+            if (!$mediaContainer.hasClass('ui-active')) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+                $('.mes_media_container.ui-active').removeClass('ui-active');
+                $mediaContainer.addClass('ui-active');
+            } else {
+                if (!isButton) {
+                    e.stopImmediatePropagation();
+                    e.preventDefault();
+                    $mediaContainer.removeClass('ui-active');
+                }
+            }
+        }, true);
+
+        /* 리롤 버튼 실행 로직 */
         $(document).on('click', '.image-reroll-button', function (e) {
-            e.preventDefault(); e.stopPropagation();
             const messageBlock = $(this).closest('.mes');
             const mesId = messageBlock.attr('mesid');
             let $visibleImg = messageBlock.find('.mes_img_container:not([style*="display: none"]) img.mes_img');
@@ -472,6 +673,7 @@ $(function () {
             const imgTitle = $visibleImg.attr('title') || $visibleImg.attr('alt') || "";
             handleReroll(mesId, imgTitle);
         });
+
     })();
 });
 
@@ -558,14 +760,25 @@ function addRerollButtonToMessage(mesId) {
     $controls.each(function() {
         const $this = $(this);
         if (!$this.find('.image-reroll-button').length) {
-            const rerollBtn = `<div title="Generate Another Image" class="right_menu_button fa-lg fa-solid fa-clone image-reroll-button interactable" role="button" tabindex="0"></div>`;
+            const rerollBtn = `<div title="Generate Another Image" class="right_menu_button fa-solid fa-rotate image-reroll-button interactable" role="button" tabindex="0"></div>`;
+            
             const deleteBtn = $this.find('.mes_media_delete');
-            if (deleteBtn.length) $(rerollBtn).insertBefore(deleteBtn);
-            else $this.append(rerollBtn);
+            if (deleteBtn.length) {
+                $(rerollBtn).insertBefore(deleteBtn);
+            } else {
+                $this.append(rerollBtn);
+            }
         }
     });
 }
-
+function addMobileToggleToMessage(mesId) {
+    const $message = $(`.mes[mesid="${mesId}"]`);
+    $message.find('.mes_media_container').each(function () {
+        if (!$(this).find('.mobile-ui-toggle').length) {
+            $(this).append(`<div class="mobile-ui-toggle">⚙</div>`);
+        }
+    });
+}
 async function handleReroll(mesId, currentPrompt) {
     if (!SlashCommandParser.commands['sd']) {
         toastr.error("Stable Diffusion extension not loaded.");
