@@ -252,25 +252,28 @@ function renderCharacterLinkUI() {
     const linkedPreset = extension_settings[extensionName].linkedPresets[avatarFile];
 
     let statusHtml = `<strong>현재 캐릭터:</strong> ${character.name}<br>`;
+    
     if (linkedPreset && extension_settings[extensionName].promptPresets[linkedPreset]) {
         statusHtml += `<strong>연동된 템플릿:</strong> <span style="color: var(--accent-color); font-weight: bold;">${linkedPreset}</span>`;
         $('#gen-remove-char-link-btn').show();
         
         const presetContent = extension_settings[extensionName].promptPresets[linkedPreset];
+        
         if (extension_settings[extensionName].promptInjection.prompt !== presetContent) {
             extension_settings[extensionName].promptInjection.prompt = presetContent;
             $('#prompt_injection_text').val(presetContent);
             updatePresetSelect();
         }
-    } else {
-        statusHtml += `<strong>연동 상태:</strong> <span style="color: var(--color-text-vague);">없음 (기본 템플릿 사용 중)</span>`;
+    } 
+
+    else {
+        statusHtml += `<strong>연동 상태:</strong> <span style="color: var(--color-text-vague);">없음 (전역 설정 사용 중)</span>`;
         $('#gen-remove-char-link-btn').hide();
     }
 
     $('#gen-char-link-info-area').html(statusHtml);
     $('#gen-save-char-link-btn').prop('disabled', false);
 }
-
 function onSaveCharLink() {
     const context = getContext();
     const charId = context.characterId;
@@ -294,6 +297,7 @@ function onSaveCharLink() {
     
     saveSettingsDebounced();
     renderCharacterLinkUI();
+    renderAllLinkedPresetsList(); 
     toastr.success(`${characters[charId].name} 캐릭터에게 '${presetName}' 템플릿이 연동되었습니다.`);
 }
 
@@ -303,12 +307,15 @@ function onRemoveCharLink() {
     if (!charId || !characters[charId]) return;
 
     const avatarFile = characters[charId].avatar;
-    delete extension_settings[extensionName].linkedPresets[avatarFile];
     
-    saveSettingsDebounced();
-    renderCharacterLinkUI();
-    updatePresetSelect();
-    toastr.info("캐릭터 연동이 해제되었습니다.");
+    if (extension_settings[extensionName].linkedPresets[avatarFile]) {
+        delete extension_settings[extensionName].linkedPresets[avatarFile];
+        saveSettingsDebounced();
+        renderCharacterLinkUI();
+        updatePresetSelect();
+        renderAllLinkedPresetsList(); 
+        toastr.info("캐릭터 연동이 해제되었습니다. 이제 현재 설정된 프롬프트가 전역으로 유지됩니다.");
+    }
 }
 
 function renderAllLinkedPresetsList() {
@@ -375,6 +382,7 @@ function updatePresetSelect() {
 function getFinalPrompt() {
     const context = getContext();
     const charId = context.characterId;
+
     let finalPrompt = extension_settings[extensionName].promptInjection.prompt;
 
     if (charId && characters[charId]) {
@@ -383,7 +391,7 @@ function getFinalPrompt() {
         
         if (linkedPresetName && extension_settings[extensionName].promptPresets[linkedPresetName]) {
             finalPrompt = extension_settings[extensionName].promptPresets[linkedPresetName];
-            console.log(`[Image Auto Gen] 연동된 프리셋 '${linkedPresetName}' 적용됨.`);
+            console.log(`[AutoPic] 캐릭터 '${characters[charId].name}'에 연동된 프리셋 '${linkedPresetName}' 적용.`);
         }
     }
     return finalPrompt;
