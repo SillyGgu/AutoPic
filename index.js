@@ -1,4 +1,3 @@
-
 import { extension_settings, getContext } from '../../../extensions.js';
 import {
     saveSettingsDebounced,
@@ -527,29 +526,27 @@ async function toggleExtensionStatus() {
 async function handleLastImageReroll() {
     const context = getContext();
     const chat = context.chat;
-    const regexString = extension_settings[extensionName]?.promptInjection?.regex || '/<pic[^>]*\\sprompt="([^"]*)"[^>]*?>/g';
-    let imgTagRegex;
-    try {
-        imgTagRegex = regexFromString(regexString);
-    } catch (e) {
-        imgTagRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
-    }
+    
+    // 감지용 정규식들
+    const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
+    const imgRegex = /<img[^>]*\stitle="([^"]*)"[^>]*?>/g;
 
     for (let i = chat.length - 1; i >= 0; i--) {
         const message = chat[i];
         if (message.is_user) continue;
 
-        if (message.extra && (message.extra.image || message.extra.image_swipes)) {
-            const currentTitle = message.extra.title || "";
-            handleReroll(i, currentTitle);
+        const hasPic = message.mes.match(picRegex);
+        const hasImg = message.mes.match(imgRegex);
+
+        if (hasPic || hasImg) {
+            handleReroll(i, ""); 
             return;
         }
 
-        const match = message.mes.match(imgTagRegex);
-        if (match) {
-            const cleanMatch = match[0].match(/prompt="([^"]*)"/);
-            const initialPrompt = cleanMatch ? cleanMatch[1] : "";
-            handleReroll(i, initialPrompt);
+        // 2. 태그는 없지만 extra 데이터에 이미지가 있는 경우 (인라인 모드 등)
+        if (message.extra && (message.extra.image || message.extra.image_swipes)) {
+            const currentTitle = message.extra.title || "";
+            handleReroll(i, currentTitle);
             return;
         }
     }
@@ -579,53 +576,64 @@ async function handleReroll(mesId, currentPrompt) {
     const message = context.chat[mesId];
     if (!message) return;
 
-    // 1. 정규식 준비 및 모든 프롬프트 추출
-    const regexString = extension_settings[extensionName]?.promptInjection?.regex || '/<pic[^>]*\\sprompt="([^"]*)"[^>]*?>/g';
-    let regex;
-    try {
-        regex = regexFromString(regexString);
-        if (!regex.global) regex = new RegExp(regex.source, regex.flags + 'g');
-    } catch (e) {
-        regex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
-    }
+    const currentInsertType = extension_settings[extensionName].insertType;
+
+    const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
+    const imgRegex = /<img[^>]*\ssrc="([^"]*)"[^>]*\stitle="([^"]*)"[^>]*?>/g;
     
-    let textMatches = [];
-    if (message.mes) {
-        textMatches = [...message.mes.matchAll(regex)].map(m => m[1]);
+    let foundItems = []; 
+
+    // 1. 본문에서 태그 수집
+    let picMatches = [...message.mes.matchAll(picRegex)];
+    picMatches.forEach(m => {
+        foundItems.push({ originalTag: m[0], prompt: m[1], type: 'tag' });
+    });
+
+    let imgMatches = [...message.mes.matchAll(imgRegex)];
+    imgMatches.forEach(m => {
+        foundItems.push({ originalTag: m[0], prompt: m[2], type: 'tag' });
+    });
+
+    // 2. 스와이프 이미지 수집 (인라인 모드 대응)
+    if (message.extra && message.extra.image_swipes && message.extra.image_swipes.length > 0) {
+        message.extra.image_swipes.forEach((src, sIdx) => {
+            foundItems.push({ 
+                swipeIdx: sIdx, 
+                prompt: message.extra.title || currentPrompt || "", 
+                type: 'swipe' 
+            });
+        });
     }
 
-    let allPrompts = [];
-    if (textMatches.length > 0) {
-        allPrompts = [...new Set(textMatches)].filter(p => p && String(p).trim().length > 0);
-    } else {
-        allPrompts = [currentPrompt].filter(p => p && String(p).trim().length > 0);
+    // 3. 아무것도 없을 때 예외 처리
+    if (foundItems.length === 0 && currentPrompt) {
+        foundItems.push({ originalTag: null, prompt: currentPrompt, type: 'extra' });
     }
-    
-    if (allPrompts.length === 0) allPrompts = [""];
+    if (foundItems.length === 0) {
+        foundItems.push({ originalTag: null, prompt: "", type: 'extra' });
+    }
 
-    // 2. 상태 저장용 변수
     let selectedIdx = 0;
-    let editedPrompts = [...allPrompts];
+    let editedPrompts = foundItems.map(item => item.prompt);
 
-    // 3. 팝업 HTML 생성
     let popupHtml = `<div class="reroll_popup_container" style="min-width:300px;">
         <h3 style="margin-bottom:15px; border-bottom:1px solid #4a90e2; padding-bottom:5px;">이미지 다시 생성</h3>
-        <p style="font-size:0.85rem; color:#aaa; margin-bottom:15px;">생성할 프롬프트를 선택하거나 수정하세요:</p>`;
+        <p style="font-size:0.85rem; color:#aaa; margin-bottom:15px;">교체할 이미지를 선택하거나 프롬프트를 수정하세요:</p>`;
     
-    allPrompts.forEach((prompt, idx) => {
+    foundItems.forEach((item, idx) => {
+        const typeLabel = item.type === 'tag' ? '본문 태그' : (item.type === 'swipe' ? `스와이프 #${item.swipeIdx + 1}` : '기타');
         popupHtml += `
             <div class="prompt_option_item" style="margin-bottom:15px; padding:12px; background:rgba(0,0,0,0.2); border:1px solid #333; border-radius:8px;">
                 <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
                     <input type="radio" name="reroll_prompt_choice" class="reroll_radio" id="prompt_choice_${idx}" value="${idx}" ${idx === 0 ? 'checked' : ''}>
-                    <label for="prompt_choice_${idx}" style="font-weight:bold; color:#4a90e2; cursor:pointer;">프롬프트 #${idx + 1}</label>
+                    <label for="prompt_choice_${idx}" style="font-weight:bold; color:#4a90e2; cursor:pointer;">이미지 #${idx + 1} (${typeLabel})</label>
                 </div>
-                <textarea class="reroll_textarea text_pole" data-idx="${idx}" rows="3" style="width: 100%; background:#111; color:#fff; border:1px solid #444; border-radius:5px; padding:8px;">${escapeHtmlAttribute(String(prompt))}</textarea>
+                <textarea class="reroll_textarea text_pole" data-idx="${idx}" rows="3" style="width: 100%; background:#111; color:#fff; border:1px solid #444; border-radius:5px; padding:8px;">${escapeHtmlAttribute(String(item.prompt))}</textarea>
             </div>
         `;
     });
     popupHtml += `</div>`;
 
-    // 4. 이벤트 리스너 등록 (팝업이 떠 있는 동안 작동)
     $(document).on('change', '.reroll_radio', function() {
         selectedIdx = parseInt($(this).val());
     });
@@ -634,30 +642,48 @@ async function handleReroll(mesId, currentPrompt) {
         editedPrompts[idx] = $(this).val();
     });
 
-    // 5. 모달 호출
     const result = await callGenericPopup(popupHtml, POPUP_TYPE.CONFIRM, '', { okButton: 'Generate', cancelButton: 'Cancel' });
 
-    // 6. 리스너 해제 (중요: 메모리 누수 방지)
     $(document).off('change', '.reroll_radio');
     $(document).off('input', '.reroll_textarea');
 
-    // 7. 결과 처리
     if (result) {
         const finalPrompt = editedPrompts[selectedIdx];
+        const targetItem = foundItems[selectedIdx];
+
         if (finalPrompt && finalPrompt.trim()) {
             try {
                 toastr.info("이미지 생성 중...");
                 const resultUrl = await SlashCommandParser.commands['sd'].callback({ quiet: 'true' }, finalPrompt.trim());
                 
                 if (typeof resultUrl === 'string' && !resultUrl.startsWith('Error')) {
-                    if (!message.extra) message.extra = {};
-                    message.extra.image_swipes = [resultUrl]; 
-                    message.extra.image = resultUrl;
-                    message.extra.title = finalPrompt.trim();
-                    message.extra.inline_image = true;
+                    
+                    if (currentInsertType === INSERT_TYPE.REPLACE && targetItem.originalTag) {
+                        // 1. 태그 치환 모드일 때만 본문 텍스트 수정
+                        const newTag = `<img src="${escapeHtmlAttribute(resultUrl)}" title="${escapeHtmlAttribute(finalPrompt.trim())}" alt="${escapeHtmlAttribute(finalPrompt.trim())}">`;
+                        message.mes = message.mes.replace(targetItem.originalTag, newTag);
+                        updateMessageBlock(mesId, message);
+                        await eventSource.emit(event_types.MESSAGE_UPDATED, mesId);
+                    } 
+                    else {
+                        if (!message.extra) message.extra = {};
+                        if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
 
-                    const $mesBlock = $(`.mes[mesid="${mesId}"]`);
-                    appendMediaToMessage(message, $mesBlock);
+                        if (targetItem.swipeIdx !== undefined) {
+                            message.extra.image_swipes[targetItem.swipeIdx] = resultUrl;
+                        } else {
+                            message.extra.image_swipes.push(resultUrl);
+                        }
+
+                        message.extra.image = resultUrl;
+                        message.extra.title = finalPrompt.trim();
+                        message.extra.inline_image = true;
+
+                        const $mesBlock = $(`.mes[mesid="${mesId}"]`);
+                        appendMediaToMessage(message, $mesBlock);
+                        updateMessageBlock(mesId, message);
+                    }
+
                     await context.saveChat();
                     toastr.success("이미지가 교체되었습니다.");
                 } else {
@@ -679,42 +705,88 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
     const message = context.chat[context.chat.length - 1];
     if (!message || message.is_user) return;
 
-    const regex = regexFromString(extension_settings[extensionName].promptInjection.regex);
-    const matches = regex.global ? [...message.mes.matchAll(regex)] : [message.mes.match(regex)].filter(Boolean);
-
-    if (matches.length > 0) {
-        setTimeout(async () => {
-            try {
-                toastr.info(`Generating ${matches.length} images...`);
-                const insertType = extension_settings[extensionName].insertType;
-                if (!message.extra) message.extra = {};
-                if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
-                const messageElement = $(`.mes[mesid="${context.chat.length - 1}"]`);
-
-                for (const match of matches) {
-                    const prompt = match?.[1] || '';
-                    if (!prompt.trim()) continue;
-
-                    const result = await SlashCommandParser.commands['sd'].callback({ quiet: insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true' }, prompt);
-                    
-                    if (typeof result === 'string' && result.trim().length > 0) {
-                        if (insertType === INSERT_TYPE.INLINE) {
-                            message.extra.image_swipes.push(result);
-                            message.extra.image = result;
-                            message.extra.title = prompt;
-                            message.extra.inline_image = true;
-                            appendMediaToMessage(message, messageElement);
-                        } else if (insertType === INSERT_TYPE.REPLACE) {
-                            const newTag = `<img src="${escapeHtmlAttribute(result)}" title="${escapeHtmlAttribute(prompt)}" alt="${escapeHtmlAttribute(prompt)}">`;
-                            message.mes = message.mes.replace(match[0], newTag);
-                            updateMessageBlock(context.chat.length - 1, message);
-                            await eventSource.emit(event_types.MESSAGE_UPDATED, context.chat.length - 1);
-                        }
-                    }
-                }
-                await context.saveChat();
-                toastr.success("Generation complete.");
-            } catch (e) { console.error(e); }
-        }, 100);
+    // 정규식 설정
+    let regex;
+    try {
+        let rawRegex = regexFromString(extension_settings[extensionName].promptInjection.regex);
+        regex = new RegExp(rawRegex.source, rawRegex.flags.includes('g') ? rawRegex.flags : rawRegex.flags + 'g');
+    } catch (e) {
+        regex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
     }
+
+    const matches = [...message.mes.matchAll(regex)];
+    if (matches.length === 0) return;
+
+    setTimeout(async () => {
+        try {
+            const currentIdx = context.chat.indexOf(message);
+            if (currentIdx === -1) return; 
+
+            const insertType = extension_settings[extensionName].insertType;
+            const total = matches.length;
+            
+            toastr.info(`${total}개의 이미지 생성을 시작합니다...`, "AutoPic", { "progressBar": true });
+            
+            if (!message.extra) message.extra = {};
+            if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
+            
+            const messageElement = $(`.mes[mesid="${currentIdx}"]`);
+            let hasChanged = false;
+            let firstNewImage = null;
+            let updatedMes = message.mes;
+
+            for (let i = 0; i < matches.length; i++) {
+                toastr.info(`이미지 생성 중... (${i + 1} / ${total})`, "AutoPic", { "timeOut": 2000 });
+
+                const match = matches[i];
+                const fullTag = match[0];
+                const prompt = match[1] || '';
+                
+                if (!prompt.trim()) continue;
+
+                const result = await SlashCommandParser.commands['sd'].callback(
+                    { quiet: (insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true') }, 
+                    prompt.trim()
+                );
+                
+                if (typeof result === 'string' && result.trim().length > 0 && !result.startsWith('Error')) {
+                    hasChanged = true;
+                    
+                    if (insertType === INSERT_TYPE.INLINE) {
+                        message.extra.image_swipes.push(result);
+                        if (!firstNewImage) firstNewImage = result;
+                    } 
+                    else if (insertType === INSERT_TYPE.REPLACE) {
+                        const newTag = `<img src="${escapeHtmlAttribute(result)}" title="${escapeHtmlAttribute(prompt)}" alt="${escapeHtmlAttribute(prompt)}">`;
+                        updatedMes = updatedMes.replace(fullTag, () => newTag);
+                    }
+                } else {
+                    toastr.error(`${i + 1}번째 이미지 생성에 실패했습니다.`);
+                }
+            }
+
+            if (hasChanged) {
+                if (insertType === INSERT_TYPE.INLINE) {
+                    message.extra.image = firstNewImage; 
+                    message.extra.inline_image = true;
+                    appendMediaToMessage(message, messageElement);
+                } 
+                else if (insertType === INSERT_TYPE.REPLACE) {
+                    message.mes = updatedMes;
+                }
+                
+                updateMessageBlock(currentIdx, message);
+                
+                if (insertType === INSERT_TYPE.REPLACE) {
+                    await eventSource.emit(event_types.MESSAGE_UPDATED, currentIdx);
+                }
+                
+                await context.saveChat();
+                toastr.success(`총 ${total}개의 이미지 생성 및 저장 완료!`);
+            }
+        } catch (e) { 
+            console.error("[AutoPic] 오류:", e); 
+            toastr.error("이미지 생성 과정에서 오류가 발생했습니다.");
+        }
+    }, 200);
 });

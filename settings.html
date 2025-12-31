@@ -118,14 +118,27 @@
 <style>
 /* 탭 디자인 */
 .image-gen-nav-container {
-    display: flex; gap: 5px; margin-bottom: 20px; padding-bottom: 5px;
+    display: flex; 
+    flex-wrap: wrap;
+    gap: 5px; 
+    margin-bottom: 20px; 
+    padding-bottom: 5px;
     border-bottom: 2px solid #333336;
 }
+
 .image-gen-nav-item {
-    padding: 10px 16px; cursor: pointer; font-weight: 600; 
-    color: #888888; border-radius: 8px 8px 0 0; 
-    transition: all 0.2s ease; white-space: nowrap; font-size: 0.85rem;
+    padding: 10px 16px; 
+    cursor: pointer; 
+    font-weight: 600; 
+    color: #888888; 
+    border-radius: 8px 8px 0 0; 
+    transition: all 0.2s ease; 
+    white-space: nowrap; 
+    font-size: 0.85rem;
     background-color: #252529;
+    flex: 1;         
+    min-width: 100px;   
+    text-align: center; 
 }
 .image-gen-nav-item:hover { 
     background-color: #303035; 
