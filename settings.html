@@ -137,18 +137,20 @@
 }
 
 .image-gen-nav-item {
-    padding: 10px 16px; 
+    padding: 10px 8px; 
     cursor: pointer; 
     font-weight: 600; 
     color: #888888; 
     border-radius: 8px 8px 0 0; 
     transition: all 0.2s ease; 
     white-space: nowrap; 
-    font-size: 0.85rem;
+    font-size: 0.8rem; 
     background-color: #252529;
     flex: 1;         
-    min-width: 100px;   
-    text-align: center; 
+    min-width: 70px;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis; 
 }
 .image-gen-nav-item:hover { 
     background-color: #303035; 
@@ -296,4 +298,40 @@ textarea.gen-custom-input {
 #gen-linked-char-list-container::-webkit-scrollbar-thumb { background: #333336; border-radius: 4px; }
 
 .margin-bottom-15 { margin-bottom: 15px !important; }
+
+@media screen and (max-width: 500px) {
+    /* 탭 메뉴 폰트 추가 축소 */
+    .image-gen-nav-item {
+        font-size: 0.75rem;
+        padding: 8px 4px;
+    }
+
+    /* 설정 항목 줄바꿈 허용 */
+    .flex-container.flexnowrap {
+        flex-wrap: wrap !important;
+        gap: 8px !important;
+    }
+
+    /* 라벨 너비를 100%로 넓혀서 입력창이 아래로 내려가게 함 */
+    .flex-container label {
+        min-width: 100% !important;
+        flex-basis: 100%;
+        margin-bottom: 4px;
+    }
+    
+    /* 입력창 및 셀렉트박스 너비 최적화 */
+    .gen-custom-input {
+        width: 100% !important;
+        flex: 1 1 100%;
+    }
+
+    /* 템플릿 관리 버튼 레이아웃 조정 */
+    #tab-gen-templates .flex-container {
+        flex-wrap: wrap;
+    }
+    #prompt_preset_select {
+        min-width: 100%;
+        margin-bottom: 8px;
+    }
+}
 </style>
