@@ -877,11 +877,9 @@ async function handleReroll(mesId, currentPrompt) {
                 if (typeof resultUrl === 'string' && !resultUrl.startsWith('Error')) {
                     
                     if (currentInsertType === INSERT_TYPE.REPLACE && targetItem.originalTag) {
-                        // 1. 태그 치환 모드일 때만 본문 텍스트 수정
                         const newTag = `<img src="${escapeHtmlAttribute(resultUrl)}" title="${escapeHtmlAttribute(finalPrompt.trim())}" alt="${escapeHtmlAttribute(finalPrompt.trim())}">`;
                         message.mes = message.mes.replace(targetItem.originalTag, newTag);
                         updateMessageBlock(mesId, message);
-                        await eventSource.emit(event_types.MESSAGE_UPDATED, mesId);
                     } 
                     else {
                         if (!message.extra) message.extra = {};
@@ -901,7 +899,7 @@ async function handleReroll(mesId, currentPrompt) {
                         appendMediaToMessage(message, $mesBlock);
                         updateMessageBlock(mesId, message);
                     }
-
+                    await eventSource.emit(event_types.MESSAGE_UPDATED, mesId);
                     await eventSource.emit(event_types.MESSAGE_RENDERED, mesId);
                     await context.saveChat();
                     toastr.success("이미지가 교체되었습니다.");
