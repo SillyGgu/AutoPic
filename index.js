@@ -902,6 +902,7 @@ async function handleReroll(mesId, currentPrompt) {
                         updateMessageBlock(mesId, message);
                     }
 
+                    await eventSource.emit(event_types.MESSAGE_RENDERED, mesId);
                     await context.saveChat();
                     toastr.success("이미지가 교체되었습니다.");
                 } else {
@@ -995,9 +996,8 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
                 
                 updateMessageBlock(currentIdx, message);
                 
-                if (insertType === INSERT_TYPE.REPLACE) {
-                    await eventSource.emit(event_types.MESSAGE_UPDATED, currentIdx);
-                }
+                await eventSource.emit(event_types.MESSAGE_UPDATED, currentIdx);
+                await eventSource.emit(event_types.MESSAGE_RENDERED, currentIdx);
                 
                 await context.saveChat();
                 toastr.success(`총 ${total}개의 이미지 생성 및 저장 완료!`);
