@@ -134,72 +134,137 @@ async function createSettings(settingsHtml) {
         saveSettingsDebounced();
     });
 
+    // 주입 활성화 체크박스
     $('#prompt_injection_enabled').on('change', function () {
         extension_settings[extensionName].promptInjection.enabled = $(this).prop('checked');
         saveSettingsDebounced();
     });
 
+    // [수정 핵심] 텍스트 입력 시 설정값만 업데이트하고 드롭다운은 건드리지 않음
     $('#prompt_injection_text').on('input', function () {
-        extension_settings[extensionName].promptInjection.prompt = $(this).val();
-        updatePresetSelect(); 
+        const currentVal = $(this).val();
+        // 실제 설정 데이터 업데이트
+        extension_settings[extensionName].promptInjection.prompt = currentVal;
+        
+        // 입력 중에는 드롭다운을 건드리지 않고(초기화 방지) 저장만 수행
         saveSettingsDebounced();
     });
 
-
+    // 템플릿 선택 시 로드
     $('#prompt_preset_select').on('change', function() {
         const selectedKey = $(this).val();
+        if (!selectedKey) return;
+
         const presets = extension_settings[extensionName].promptPresets;
-        if (selectedKey && presets[selectedKey]) {
-            extension_settings[extensionName].promptInjection.prompt = presets[selectedKey];
-            $('#prompt_injection_text').val(presets[selectedKey]);
+        if (presets && presets[selectedKey] !== undefined) {
+            const content = presets[selectedKey];
+            
+            $('#prompt_injection_text').val(content);
+            
+            extension_settings[extensionName].promptInjection.prompt = content;
+            
             saveSettingsDebounced();
+        }
+    });
+    $('#add_new_prompt_preset').on('click', function() {
+        $('#prompt_preset_select').val(""); 
+        $('#prompt_injection_text').val(""); 
+        extension_settings[extensionName].promptInjection.prompt = ""; 
+        saveSettingsDebounced();
+        
+        $('#prompt_injection_text').focus();
+        toastr.info("내용을 입력한 후 저장 버튼을 누르면 새 템플릿이 생성됩니다.");
+    });
+
+    $('#rename_prompt_preset').on('click', async function() {
+        const oldName = $('#prompt_preset_select').val();
+        if (!oldName) {
+            toastr.warning("수정할 템플릿을 먼저 선택해주세요.");
+            return;
+        }
+
+        const newName = await callGenericPopup(
+            `'${oldName}'의 새 이름을 입력하세요:`,
+            POPUP_TYPE.INPUT,
+            oldName
+        );
+
+        if (newName && newName.trim() && newName.trim() !== oldName) {
+            const cleanNewName = newName.trim();
+            const content = extension_settings[extensionName].promptPresets[oldName];
+
+            extension_settings[extensionName].promptPresets[cleanNewName] = content;
+            delete extension_settings[extensionName].promptPresets[oldName];
+
+            const linked = extension_settings[extensionName].linkedPresets;
+            for (const avatar in linked) {
+                if (linked[avatar] === oldName) linked[avatar] = cleanNewName;
+            }
+
+            saveSettingsDebounced();
+            updatePresetSelect();
+            $('#prompt_preset_select').val(cleanNewName);
+            toastr.success("템플릿 이름이 변경되었습니다.");
         }
     });
 
     $('#save_prompt_preset').on('click', async function() {
         const currentPrompt = $('#prompt_injection_text').val();
         if (!currentPrompt || !currentPrompt.trim()) {
-            toastr.warning("Prompt content is empty.");
+            toastr.warning("내용이 비어있습니다.");
             return;
         }
-        const currentSelection = $('#prompt_preset_select').val();
-        const defaultName = currentSelection || "New Prompt";
 
-        const name = await callGenericPopup(
-            `Enter a name for this prompt template:`,
-            POPUP_TYPE.INPUT,
-            defaultName,
-            { okButton: "Save", cancelButton: "Cancel" }
-        );
+        const selectedKey = $('#prompt_preset_select').val();
 
-        if (name && name.trim()) {
-            const cleanName = name.trim();
-            extension_settings[extensionName].promptPresets[cleanName] = currentPrompt;
+        if (selectedKey) {
+            extension_settings[extensionName].promptPresets[selectedKey] = currentPrompt;
             saveSettingsDebounced();
-            updatePresetSelect();
-            $('#prompt_preset_select').val(cleanName);
-            toastr.success(`Prompt template "${cleanName}" saved.`);
+            toastr.success(`'${selectedKey}' 저장 완료`);
+        } else {
+            const name = await callGenericPopup(
+                `새 템플릿의 이름을 입력하세요:`,
+                POPUP_TYPE.INPUT,
+                "",
+                { okButton: "저장", cancelButton: "취소" }
+            );
+
+            if (name && name.trim()) {
+                const cleanName = name.trim();
+                if (extension_settings[extensionName].promptPresets[cleanName]) {
+                    toastr.error("이미 존재하는 이름입니다.");
+                    return;
+                }
+
+                extension_settings[extensionName].promptPresets[cleanName] = currentPrompt;
+                saveSettingsDebounced();
+                
+                updatePresetSelect();
+                $('#prompt_preset_select').val(cleanName);
+                toastr.success(`새 템플릿 '${cleanName}' 생성 완료`);
+            }
         }
     });
 
     $('#delete_prompt_preset').on('click', async function() {
         const selectedKey = $('#prompt_preset_select').val();
         if (!selectedKey) {
-            toastr.warning("Please select a preset to delete first.");
+            toastr.warning("삭제할 템플릿을 선택해주세요.");
             return;
         }
         const confirm = await callGenericPopup(
-            `Are you sure you want to delete the preset "${selectedKey}"?`,
+            `정말로 '${selectedKey}' 템플릿을 삭제하시겠습니까?`,
             POPUP_TYPE.CONFIRM
         );
         if (confirm) {
             delete extension_settings[extensionName].promptPresets[selectedKey];
             saveSettingsDebounced();
             updatePresetSelect();
-            toastr.success(`Preset "${selectedKey}" deleted.`);
+            $('#prompt_injection_text').val("");
+            extension_settings[extensionName].promptInjection.prompt = "";
+            toastr.success(`'${selectedKey}' 템플릿이 삭제되었습니다.`);
         }
     });
-
 
     $('#gen-save-char-link-btn').on('click', onSaveCharLink);
     $('#gen-remove-char-link-btn').on('click', onRemoveCharLink);
@@ -258,16 +323,15 @@ function renderCharacterLinkUI() {
         
         const presetContent = extension_settings[extensionName].promptPresets[linkedPreset];
         
-        if (extension_settings[extensionName].promptInjection.prompt !== presetContent) {
-            extension_settings[extensionName].promptInjection.prompt = presetContent;
-            $('#prompt_injection_text').val(presetContent);
-            updatePresetSelect();
-        }
+        extension_settings[extensionName].promptInjection.prompt = presetContent;
+        $('#prompt_injection_text').val(presetContent);
+        
+        updatePresetSelect(linkedPreset);
     } 
-
     else {
         statusHtml += `<strong>연동 상태:</strong> <span style="color: var(--color-text-vague);">없음 (전역 설정 사용 중)</span>`;
         $('#gen-remove-char-link-btn').hide();
+        updatePresetSelect();
     }
 
     $('#gen-char-link-info-area').html(statusHtml);
@@ -357,7 +421,7 @@ function renderAllLinkedPresetsList() {
     });
 }
 
-function updatePresetSelect() {
+function updatePresetSelect(forceSelectedName = null) {
     const select = $('#prompt_preset_select');
     if (!select.length) return;
 
@@ -365,7 +429,7 @@ function updatePresetSelect() {
     const presets = extension_settings[extensionName].promptPresets || {};
     
     select.empty();
-    select.append('<option value="" disabled selected>-- Select Preset --</option>');
+    select.append('<option value="">-- 템플릿 선택 --</option>');
 
     let matchedKey = null;
     Object.keys(presets).sort().forEach(key => {
@@ -374,8 +438,15 @@ function updatePresetSelect() {
         if (presets[key] === currentPrompt) matchedKey = key;
     });
 
-    if (matchedKey) select.val(matchedKey);
-    else select.val("");
+    if (forceSelectedName && presets[forceSelectedName] !== undefined) {
+        select.val(forceSelectedName);
+    } 
+    else if (matchedKey) {
+        select.val(matchedKey);
+    } 
+    else {
+        select.val("");
+    }
 }
 
 function getFinalPrompt() {
@@ -613,6 +684,23 @@ $(function () {
 				.mes_media_container::after {
 					display: none !important;
 				}
+				/* ===============================
+				   5. 태그 치환 모드 이미지 스타일 (수정됨)
+				================================ */
+				.mes_text img {
+					border-radius: 12px !important;
+					margin: 10px 0 !important;
+					display: block !important;
+					max-width: 100% !important;
+					height: auto !important;
+					box-shadow: 0 4px 15px rgba(0,0,0,0.3) !important;
+					border: 1px solid #333336 !important;
+					transition: transform 0.2s ease;
+				}
+
+				.mes_text img:hover {
+					transform: scale(1.01);
+				}
             </style>
         `);
         }
@@ -633,10 +721,33 @@ $(function () {
         $('#extensions-settings-button').on('click', () => setTimeout(updateUI, 200));
 
         eventSource.on(event_types.MESSAGE_RENDERED, (mesId) => {
+            const context = getContext();
+            const message = context.chat[mesId];
+            if (message && !message.is_user && !message.extra?.title) {
+                const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/i;
+                const imgRegex = /<img[^>]*\stitle="([^"]*)"[^>]*?>/i;
+                const match = message.mes.match(picRegex) || message.mes.match(imgRegex);
+                if (match && match[1]) {
+                    if (!message.extra) message.extra = {};
+                    message.extra.title = match[1];
+                }
+            }
             addRerollButtonToMessage(mesId);
             addMobileToggleToMessage(mesId);
         });
+
         eventSource.on(event_types.MESSAGE_UPDATED, (mesId) => {
+            const context = getContext();
+            const message = context.chat[mesId];
+            if (message && !message.is_user && !message.extra?.title) {
+                const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/i;
+                const imgRegex = /<img[^>]*\stitle="([^"]*)"[^>]*?>/i;
+                const match = message.mes.match(picRegex) || message.mes.match(imgRegex);
+                if (match && match[1]) {
+                    if (!message.extra) message.extra = {};
+                    message.extra.title = match[1];
+                }
+            }
             addRerollButtonToMessage(mesId);
             addMobileToggleToMessage(mesId);
         });
@@ -801,7 +912,6 @@ async function handleReroll(mesId, currentPrompt) {
     
     let foundItems = []; 
 
-    // 1. 본문에서 태그 수집
     let picMatches = [...message.mes.matchAll(picRegex)];
     picMatches.forEach(m => {
         foundItems.push({ originalTag: m[0], prompt: m[1], type: 'tag' });
@@ -812,7 +922,6 @@ async function handleReroll(mesId, currentPrompt) {
         foundItems.push({ originalTag: m[0], prompt: m[2], type: 'tag' });
     });
 
-    // 2. 스와이프 이미지 수집 (인라인 모드 대응)
     if (message.extra && message.extra.image_swipes && message.extra.image_swipes.length > 0) {
         message.extra.image_swipes.forEach((src, sIdx) => {
             foundItems.push({ 
@@ -823,7 +932,6 @@ async function handleReroll(mesId, currentPrompt) {
         });
     }
 
-    // 3. 아무것도 없을 때 예외 처리
     if (foundItems.length === 0 && currentPrompt) {
         foundItems.push({ originalTag: null, prompt: currentPrompt, type: 'extra' });
     }
@@ -879,7 +987,6 @@ async function handleReroll(mesId, currentPrompt) {
                     if (currentInsertType === INSERT_TYPE.REPLACE && targetItem.originalTag) {
                         const newTag = `<img src="${escapeHtmlAttribute(resultUrl)}" title="${escapeHtmlAttribute(finalPrompt.trim())}" alt="${escapeHtmlAttribute(finalPrompt.trim())}">`;
                         message.mes = message.mes.replace(targetItem.originalTag, newTag);
-                        updateMessageBlock(mesId, message);
                     } 
                     else {
                         if (!message.extra) message.extra = {};
@@ -894,14 +1001,17 @@ async function handleReroll(mesId, currentPrompt) {
                         message.extra.image = resultUrl;
                         message.extra.title = finalPrompt.trim();
                         message.extra.inline_image = true;
-
-                        const $mesBlock = $(`.mes[mesid="${mesId}"]`);
-                        appendMediaToMessage(message, $mesBlock);
-                        updateMessageBlock(mesId, message);
                     }
+
+                    updateMessageBlock(mesId, message);
+                    const $mesBlock = $(`.mes[mesid="${mesId}"]`);
+                    appendMediaToMessage(message, $mesBlock);
+                    
+                    await context.saveChat();
+                    
                     await eventSource.emit(event_types.MESSAGE_UPDATED, mesId);
                     await eventSource.emit(event_types.MESSAGE_RENDERED, mesId);
-                    await context.saveChat();
+                    
                     toastr.success("이미지가 교체되었습니다.");
                 } else {
                     toastr.error("생성 실패: SD 익스텐션 응답 확인 필요");
@@ -914,7 +1024,6 @@ async function handleReroll(mesId, currentPrompt) {
     }
 }
 
-// 메시지 수신 감시 및 자동 생성
 eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
     if (!extension_settings[extensionName] || extension_settings[extensionName].insertType === INSERT_TYPE.DISABLED) return;
 
@@ -922,7 +1031,6 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
     const message = context.chat[context.chat.length - 1];
     if (!message || message.is_user) return;
 
-    // 정규식 설정
     let regex;
     try {
         let rawRegex = regexFromString(extension_settings[extensionName].promptInjection.regex);
@@ -949,7 +1057,8 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
             
             const messageElement = $(`.mes[mesid="${currentIdx}"]`);
             let hasChanged = false;
-            let firstNewImage = null;
+            let lastImageResult = null;
+            let lastPromptUsed = "";
             let updatedMes = message.mes;
 
             for (let i = 0; i < matches.length; i++) {
@@ -962,16 +1071,17 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
                 if (!prompt.trim()) continue;
 
                 const result = await SlashCommandParser.commands['sd'].callback(
-                    { quiet: (insertType === INSERT_TYPE.NEW_MESSAGE ? 'false' : 'true') }, 
+                    { quiet: 'true' }, 
                     prompt.trim()
                 );
                 
                 if (typeof result === 'string' && result.trim().length > 0 && !result.startsWith('Error')) {
                     hasChanged = true;
+                    lastImageResult = result;
+                    lastPromptUsed = prompt.trim();
                     
                     if (insertType === INSERT_TYPE.INLINE) {
                         message.extra.image_swipes.push(result);
-                        if (!firstNewImage) firstNewImage = result;
                     } 
                     else if (insertType === INSERT_TYPE.REPLACE) {
                         const newTag = `<img src="${escapeHtmlAttribute(result)}" title="${escapeHtmlAttribute(prompt)}" alt="${escapeHtmlAttribute(prompt)}">`;
@@ -983,8 +1093,11 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
             }
 
             if (hasChanged) {
+                // SillyTavern 기본 팝업을 위해 프롬프트를 title에 저장
+                message.extra.title = lastPromptUsed;
+
                 if (insertType === INSERT_TYPE.INLINE) {
-                    message.extra.image = firstNewImage; 
+                    message.extra.image = lastImageResult; 
                     message.extra.inline_image = true;
                     appendMediaToMessage(message, messageElement);
                 } 
@@ -993,11 +1106,11 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
                 }
                 
                 updateMessageBlock(currentIdx, message);
+                await context.saveChat();
                 
                 await eventSource.emit(event_types.MESSAGE_UPDATED, currentIdx);
                 await eventSource.emit(event_types.MESSAGE_RENDERED, currentIdx);
                 
-                await context.saveChat();
                 toastr.success(`총 ${total}개의 이미지 생성 및 저장 완료!`);
             }
         } catch (e) { 
