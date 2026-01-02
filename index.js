@@ -40,6 +40,7 @@ function escapeHtmlAttribute(value) {
 const defaultAutoPicSettings = {
     insertType: INSERT_TYPE.DISABLED,
     lastNonDisabledType: INSERT_TYPE.INLINE, 
+    theme: 'dark', // 테마 설정 추가
     promptInjection: {
         enabled: true,
         prompt: `<image_generation>\nYou must insert a <pic prompt="example prompt"> at end of the reply. Prompts are used for stable diffusion image generation, based on the plot and character to output appropriate prompts to generate captivating images.\n</image_generation>`,
@@ -52,7 +53,6 @@ const defaultAutoPicSettings = {
     },
     linkedPresets: {} 
 };
-
 // UI 업데이트
 function updateUI() {
     $('#autopic_menu_item').toggleClass(
@@ -60,16 +60,26 @@ function updateUI() {
         extension_settings[extensionName].insertType !== INSERT_TYPE.DISABLED,
     );
 
+    // 테마 적용
+    const currentTheme = extension_settings[extensionName].theme || 'dark';
+    applyTheme(currentTheme);
+
     if ($('#image_generation_insert_type').length) {
-        updatePresetSelect();
-        renderCharacterLinkUI();
+        if (!$('#prompt_injection_text').is(':focus')) {
+            updatePresetSelect();
+            renderCharacterLinkUI();
+            $('#prompt_injection_text').val(extension_settings[extensionName].promptInjection.prompt);
+        }
 
         $('#image_generation_insert_type').val(extension_settings[extensionName].insertType);
         $('#prompt_injection_enabled').prop('checked', extension_settings[extensionName].promptInjection.enabled);
-        $('#prompt_injection_text').val(extension_settings[extensionName].promptInjection.prompt);
         $('#prompt_injection_regex').val(extension_settings[extensionName].promptInjection.regex);
         $('#prompt_injection_position').val(extension_settings[extensionName].promptInjection.position);
         $('#prompt_injection_depth').val(extension_settings[extensionName].promptInjection.depth);
+        
+        // 테마 버튼 활성화 표시
+        $('.theme-dot').removeClass('active');
+        $(`.theme-dot[data-theme="${currentTheme}"]`).addClass('active');
     }
 }
 
@@ -133,7 +143,16 @@ async function createSettings(settingsHtml) {
         updateUI();
         saveSettingsDebounced();
     });
-
+    $(document).on('click', '.theme-dot', function() {
+        const selectedTheme = $(this).data('theme');
+        extension_settings[extensionName].theme = selectedTheme;
+        applyTheme(selectedTheme);
+        
+        $('.theme-dot').removeClass('active');
+        $(this).addClass('active');
+        
+        saveSettingsDebounced();
+    });
     // 주입 활성화 체크박스
     $('#prompt_injection_enabled').on('change', function () {
         extension_settings[extensionName].promptInjection.enabled = $(this).prop('checked');
@@ -323,15 +342,20 @@ function renderCharacterLinkUI() {
         
         const presetContent = extension_settings[extensionName].promptPresets[linkedPreset];
         
-        extension_settings[extensionName].promptInjection.prompt = presetContent;
-        $('#prompt_injection_text').val(presetContent);
-        
-        updatePresetSelect(linkedPreset);
+        // [수정] 입력창 포커스 중이 아닐 때만 캐릭터 연동 템플릿 내용을 반영합니다.
+        if (!$('#prompt_injection_text').is(':focus')) {
+            extension_settings[extensionName].promptInjection.prompt = presetContent;
+            $('#prompt_injection_text').val(presetContent);
+            updatePresetSelect(linkedPreset);
+        }
     } 
     else {
         statusHtml += `<strong>연동 상태:</strong> <span style="color: var(--color-text-vague);">없음 (전역 설정 사용 중)</span>`;
         $('#gen-remove-char-link-btn').hide();
-        updatePresetSelect();
+        
+        if (!$('#prompt_injection_text').is(':focus')) {
+            updatePresetSelect();
+        }
     }
 
     $('#gen-char-link-info-area').html(statusHtml);
@@ -428,6 +452,8 @@ function updatePresetSelect(forceSelectedName = null) {
     const currentPrompt = extension_settings[extensionName].promptInjection.prompt;
     const presets = extension_settings[extensionName].promptPresets || {};
     
+    const currentlySelected = select.val();
+    
     select.empty();
     select.append('<option value="">-- 템플릿 선택 --</option>');
 
@@ -435,6 +461,7 @@ function updatePresetSelect(forceSelectedName = null) {
     Object.keys(presets).sort().forEach(key => {
         const option = $('<option></option>').val(key).text(key);
         select.append(option);
+
         if (presets[key] === currentPrompt) matchedKey = key;
     });
 
@@ -444,6 +471,10 @@ function updatePresetSelect(forceSelectedName = null) {
     else if (matchedKey) {
         select.val(matchedKey);
     } 
+
+    else if (currentlySelected && presets[currentlySelected] !== undefined) {
+        select.val(currentlySelected);
+    }
     else {
         select.val("");
     }
@@ -685,7 +716,7 @@ $(function () {
 					display: none !important;
 				}
 				/* ===============================
-				   5. 태그 치환 모드 이미지 스타일 (수정됨)
+				   5. 태그 치환 모드 이미지 스타일 (Autopic 전용 클래스 적용)
 				================================ */
 				.mes_text img {
 					border-radius: 12px !important;
@@ -1023,7 +1054,13 @@ async function handleReroll(mesId, currentPrompt) {
         }
     }
 }
-
+function applyTheme(theme) {
+    const container = $('#autopic_settings_container');
+    if (!container.length) return;
+    
+    container.removeClass('theme-dark theme-light theme-pink');
+    container.addClass(`theme-${theme}`);
+}
 eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
     if (!extension_settings[extensionName] || extension_settings[extensionName].insertType === INSERT_TYPE.DISABLED) return;
 
@@ -1093,7 +1130,6 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
             }
 
             if (hasChanged) {
-                // SillyTavern 기본 팝업을 위해 프롬프트를 title에 저장
                 message.extra.title = lastPromptUsed;
 
                 if (insertType === INSERT_TYPE.INLINE) {
