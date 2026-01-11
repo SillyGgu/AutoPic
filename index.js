@@ -36,11 +36,11 @@ function escapeHtmlAttribute(value) {
         .replace(/>/g, '&gt;');
 }
 
-// 기본 설정
+
 const defaultAutoPicSettings = {
     insertType: INSERT_TYPE.DISABLED,
     lastNonDisabledType: INSERT_TYPE.INLINE, 
-    theme: 'dark', // 테마 설정 추가
+    theme: 'dark',
     promptInjection: {
         enabled: true,
         prompt: `<image_generation>\nYou must insert a <pic prompt="example prompt"> at end of the reply. Prompts are used for stable diffusion image generation, based on the plot and character to output appropriate prompts to generate captivating images.\n</image_generation>`,
@@ -51,16 +51,15 @@ const defaultAutoPicSettings = {
     promptPresets: {
         "Default": `<image_generation>\nYou must insert a <pic prompt="example prompt"> at end of the reply. Prompts are used for stable diffusion image generation, based on the plot and character to output appropriate prompts to generate captivating images.\n</image_generation>`
     },
-    linkedPresets: {} 
+    linkedPresets: {},
+    characterPrompts: {}
 };
-// UI 업데이트
 function updateUI() {
     $('#autopic_menu_item').toggleClass(
         'selected',
         extension_settings[extensionName].insertType !== INSERT_TYPE.DISABLED,
     );
 
-    // 테마 적용
     const currentTheme = extension_settings[extensionName].theme || 'dark';
     applyTheme(currentTheme);
 
@@ -68,6 +67,8 @@ function updateUI() {
         if (!$('#prompt_injection_text').is(':focus')) {
             updatePresetSelect();
             renderCharacterLinkUI();
+
+            
             $('#prompt_injection_text').val(extension_settings[extensionName].promptInjection.prompt);
         }
 
@@ -77,13 +78,11 @@ function updateUI() {
         $('#prompt_injection_position').val(extension_settings[extensionName].promptInjection.position);
         $('#prompt_injection_depth').val(extension_settings[extensionName].promptInjection.depth);
         
-        // 테마 버튼 활성화 표시
         $('.theme-dot').removeClass('active');
         $(`.theme-dot[data-theme="${currentTheme}"]`).addClass('active');
     }
 }
 
-// 설정 로드
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
 
@@ -127,7 +126,7 @@ async function createSettings(settingsHtml) {
     $('#autopic_settings_container').empty().append(settingsHtml);
 
 
-    $('.image-gen-nav-item').on('click', function() {
+    $(document).off('click', '.image-gen-nav-item').on('click', '.image-gen-nav-item', function() {
         $('.image-gen-nav-item').removeClass('active');
         $(this).addClass('active');
         const targetTabId = $(this).data('tab');
@@ -135,6 +134,7 @@ async function createSettings(settingsHtml) {
         $('#' + targetTabId).addClass('active');
         
         if (targetTabId === 'tab-gen-linking') renderCharacterLinkUI();
+        if (targetTabId === 'tab-gen-templates') renderCharacterPrompts();
     });
 
 
@@ -153,23 +153,29 @@ async function createSettings(settingsHtml) {
         
         saveSettingsDebounced();
     });
-    // 주입 활성화 체크박스
     $('#prompt_injection_enabled').on('change', function () {
         extension_settings[extensionName].promptInjection.enabled = $(this).prop('checked');
         saveSettingsDebounced();
     });
 
-    // [수정 핵심] 텍스트 입력 시 설정값만 업데이트하고 드롭다운은 건드리지 않음
     $('#prompt_injection_text').on('input', function () {
         const currentVal = $(this).val();
-        // 실제 설정 데이터 업데이트
+        const context = getContext();
+        const charId = context.characterId;
+
         extension_settings[extensionName].promptInjection.prompt = currentVal;
-        
-        // 입력 중에는 드롭다운을 건드리지 않고(초기화 방지) 저장만 수행
+
+        if (charId && characters[charId]) {
+            const avatarFile = characters[charId].avatar;
+            const linkedPresetName = extension_settings[extensionName].linkedPresets[avatarFile];
+            if (linkedPresetName && extension_settings[extensionName].promptPresets[linkedPresetName] !== undefined) {
+                extension_settings[extensionName].promptPresets[linkedPresetName] = currentVal;
+            }
+        }
+
         saveSettingsDebounced();
     });
 
-    // 템플릿 선택 시 로드
     $('#prompt_preset_select').on('change', function() {
         const selectedKey = $(this).val();
         if (!selectedKey) return;
@@ -179,9 +185,7 @@ async function createSettings(settingsHtml) {
             const content = presets[selectedKey];
             
             $('#prompt_injection_text').val(content);
-            
             extension_settings[extensionName].promptInjection.prompt = content;
-            
             saveSettingsDebounced();
         }
     });
@@ -296,6 +300,15 @@ async function createSettings(settingsHtml) {
             $list.slideDown(200);
         }
     });
+    $('#gen-open-storage-mgmt-btn').off('click').on('click', function() {
+        const $list = $('#gen-storage-mgmt-list-container');
+        if ($list.is(':visible')) {
+            $list.slideUp(200);
+        } else {
+            renderStorageManagementList();
+            $list.slideDown(200);
+        }
+    });
 
     $('#prompt_injection_regex').on('input', function () {
         extension_settings[extensionName].promptInjection.regex = $(this).val();
@@ -323,10 +336,12 @@ async function createSettings(settingsHtml) {
 function renderCharacterLinkUI() {
     const context = getContext();
     const charId = context.characterId;
+    const $statusBadge = $('#prompt_edit_status');
     
     if (!charId || !characters[charId]) {
         $('#gen-char-link-info-area').html('<span style="color: var(--color-text-vague);">캐릭터 정보를 불러올 수 없습니다.</span>');
         $('#gen-save-char-link-btn').prop('disabled', true);
+        $statusBadge.text('전역 설정 편집 중').css('color', 'var(--ap-text-vague)');
         return;
     }
 
@@ -340,9 +355,11 @@ function renderCharacterLinkUI() {
         statusHtml += `<strong>연동된 템플릿:</strong> <span style="color: var(--accent-color); font-weight: bold;">${linkedPreset}</span>`;
         $('#gen-remove-char-link-btn').show();
         
-        const presetContent = extension_settings[extensionName].promptPresets[linkedPreset];
+        // 상태 표시줄 업데이트
+        $statusBadge.html(`<i class="fa-solid fa-link"></i> ${character.name} 연동 템플릿 편집 중`).css('color', 'var(--ap-accent)');
         
-        // [수정] 입력창 포커스 중이 아닐 때만 캐릭터 연동 템플릿 내용을 반영합니다.
+        const presetContent = extension_settings[extensionName].promptPresets[linkedPreset];
+
         if (!$('#prompt_injection_text').is(':focus')) {
             extension_settings[extensionName].promptInjection.prompt = presetContent;
             $('#prompt_injection_text').val(presetContent);
@@ -353,6 +370,9 @@ function renderCharacterLinkUI() {
         statusHtml += `<strong>연동 상태:</strong> <span style="color: var(--color-text-vague);">없음 (전역 설정 사용 중)</span>`;
         $('#gen-remove-char-link-btn').hide();
         
+        // 상태 표시줄 업데이트
+        $statusBadge.text('전역 설정 편집 중').css('color', 'var(--ap-text-vague)');
+        
         if (!$('#prompt_injection_text').is(':focus')) {
             updatePresetSelect();
         }
@@ -361,6 +381,105 @@ function renderCharacterLinkUI() {
     $('#gen-char-link-info-area').html(statusHtml);
     $('#gen-save-char-link-btn').prop('disabled', false);
 }
+
+
+function renderCharacterPrompts() {
+
+    if ($('#char_prompts_list textarea:focus').length > 0) return;
+
+    const context = getContext();
+    const charId = context.characterId ?? (characters.findIndex(c => c.avatar === context.character?.avatar));
+    const $list = $('#char_prompts_list');
+    
+    if (!$list.length) return;
+
+    $list.empty();
+
+    if (charId === undefined || charId === -1 || !characters[charId]) {
+        $list.append('<div style="text-align:center; color:var(--ap-text-vague); font-size:0.8rem; padding: 20px;">캐릭터를 먼저 선택하거나 채팅을 시작해주세요.</div>');
+        $('#add_char_prompt_btn').addClass('gen-btn-disabled').prop('disabled', true);
+        return;
+    }
+    
+    $('#add_char_prompt_btn').removeClass('gen-btn-disabled').prop('disabled', false);
+
+    const avatarFile = characters[charId].avatar;
+    
+    if (!extension_settings[extensionName].characterPrompts) {
+        extension_settings[extensionName].characterPrompts = {};
+    }
+    
+    const charData = extension_settings[extensionName].characterPrompts[avatarFile] || [];
+
+    if (charData.length === 0) {
+        $list.append('<div style="text-align:center; color:var(--ap-text-vague); font-size:0.8rem; padding: 10px;">등록된 캐릭터 프롬프트가 없습니다.</div>');
+    }
+
+    charData.forEach((item, index) => {
+        const slotNum = index + 1;
+        const isEnabled = item.enabled !== false; 
+        
+        const html = `
+            <div class="char-prompt-item" style="background: var(--ap-bg-item); padding: 12px; border-radius: 8px; border: 1px solid var(--ap-border); position: relative;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <label class="gen-checkbox-label" style="margin:0; cursor:pointer; display:flex; align-items:center; gap:8px;">
+                        <input type="checkbox" class="char-enabled-checkbox" data-index="${index}" ${isEnabled ? 'checked' : ''}>
+                        <span style="font-weight:bold; font-size:0.8rem; color:var(--ap-accent);">#${slotNum} - {autopic_char${slotNum}}</span>
+                    </label>
+                    <button class="remove-char-prompt-btn gen-btn gen-btn-red" data-index="${index}" style="padding:2px 8px; font-size:0.7rem;">삭제</button>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:8px;">
+                    <textarea class="gen-custom-input char-prompt-input" data-index="${index}" rows="2" placeholder="캐릭터 외형 프롬프트" style="resize: vertical;">${item.prompt || ''}</textarea>
+                </div>
+            </div>
+        `;
+        $list.append(html);
+    });
+
+    $('.char-prompt-input').off('input').on('input', function() {
+        const idx = $(this).data('index');
+        charData[idx].prompt = $(this).val();
+        saveSettingsDebounced();
+    });
+
+    $('.char-enabled-checkbox').off('change').on('change', function() {
+        const idx = $(this).data('index');
+        charData[idx].enabled = $(this).prop('checked');
+        saveSettingsDebounced();
+    });
+
+    $('.remove-char-prompt-btn').off('click').on('click', function() {
+        const idx = $(this).data('index');
+        charData.splice(idx, 1);
+        saveSettingsDebounced();
+        renderCharacterPrompts();
+    });
+}
+
+$(document).off('click', '#add_char_prompt_btn').on('click', '#add_char_prompt_btn', function() {
+    const context = getContext();
+    const charId = context.characterId ?? (characters.findIndex(c => c.avatar === context.character?.avatar));
+    
+    if (charId === undefined || charId === -1 || !characters[charId]) {
+        toastr.info("캐릭터를 선택해야 합니다.");
+        return;
+    }
+
+    const avatarFile = characters[charId].avatar;
+    if (!extension_settings[extensionName].characterPrompts[avatarFile]) {
+        extension_settings[extensionName].characterPrompts[avatarFile] = [];
+    }
+
+    if (extension_settings[extensionName].characterPrompts[avatarFile].length >= 6) {
+        toastr.warning("최대 6명까지만 추가할 수 있습니다.");
+        return;
+    }
+
+    extension_settings[extensionName].characterPrompts[avatarFile].push({ prompt: '', enabled: true });
+    saveSettingsDebounced();
+    renderCharacterPrompts();
+});
+
 function onSaveCharLink() {
     const context = getContext();
     const charId = context.characterId;
@@ -411,25 +530,24 @@ function renderAllLinkedPresetsList() {
 
     const linked = extension_settings[extensionName].linkedPresets;
     if (!linked || Object.keys(linked).length === 0) {
-        $container.append('<div style="padding: 15px; text-align: center; font-size: 0.85rem; color: var(--color-text-vague);">연동된 캐릭터가 없습니다.</div>');
+        $container.append('<div style="padding: 15px; text-align: center; font-size: 0.85rem; color: var(--ap-text-vague);">연동된 캐릭터가 없습니다.</div>');
         return;
     }
 
     const avatarToName = {};
     characters.forEach(c => avatarToName[c.avatar] = c.name);
 
-    Object.keys(linked).forEach(avatarFile => {
+	Object.keys(linked).forEach(avatarFile => {
         const presetName = linked[avatarFile];
         const charName = avatarToName[avatarFile] || `(알 수 없음: ${avatarFile})`;
         
         const $item = $(`
             <div class="gen-linked-item">
-                <div style="font-size: 0.85rem; color: var(--color-text); flex: 1; min-width: 0;">
-                    <div style="font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${charName}</div>
-                    <div style="color: #4a90e2; font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${presetName}</div>
+                <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px;">
+                    <span style="font-weight: bold; font-size: 0.85rem; color: var(--ap-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${charName}</span>
+                    <span style="color: var(--ap-accent); font-size: 0.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${presetName}</span>
                 </div>
-                <!-- 버튼에 gen-btn, gen-btn-red 클래스 추가 및 구조 개선 -->
-                <button class="gen-btn gen-btn-red gen-delete-link-btn" data-avatar="${avatarFile}">삭제</button>
+                <button class="gen-btn gen-btn-red gen-delete-link-btn" data-avatar="${avatarFile}" style="padding: 5px 10px; font-size: 0.75rem; flex-shrink: 0;">삭제</button>
             </div>
         `);
 
@@ -444,7 +562,71 @@ function renderAllLinkedPresetsList() {
         $container.append($item);
     });
 }
+function renderStorageManagementList() {
+    const $container = $('#gen-storage-mgmt-list-container');
+    $container.empty();
 
+    const charPrompts = extension_settings[extensionName].characterPrompts || {};
+    const linkedPresets = extension_settings[extensionName].linkedPresets || {};
+
+    const allSavedAvatars = new Set([...Object.keys(charPrompts), ...Object.keys(linkedPresets)]);
+
+    if (allSavedAvatars.size === 0) {
+        $container.append('<div style="padding: 15px; text-align: center; font-size: 0.85rem; color: var(--ap-text-vague);">저장된 데이터가 없습니다.</div>');
+        return;
+    }
+
+    const avatarToName = {};
+    characters.forEach(c => avatarToName[c.avatar] = c.name);
+
+	allSavedAvatars.forEach(avatarFile => {
+        const charName = avatarToName[avatarFile];
+        const isDeleted = !charName;
+        const displayName = charName || `(삭제됨) ${avatarFile}`;
+        
+        const hasPrompt = charPrompts[avatarFile] && charPrompts[avatarFile].length > 0;
+        const hasLink = linkedPresets[avatarFile] !== undefined && linkedPresets[avatarFile] !== null;
+
+        if (!hasPrompt && !hasLink) {
+            return;
+        }
+
+        const $item = $(`
+            <div class="gen-linked-item" style="border-bottom: 1px solid var(--ap-border); padding: 10px 15px;">
+                <div style="flex: 1; min-width: 0;">
+                    <div style="font-weight: bold; font-size: 0.85rem; color: ${isDeleted ? '#eb4d4b' : 'var(--ap-text)'}; text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">
+                        ${displayName}
+                    </div>
+                    <div style="font-size: 0.75rem; color: var(--ap-text-vague);">
+                        ${hasPrompt ? '외형 있음 ' : ''}${hasLink ? '연동 있음' : ''}
+                    </div>
+                </div>
+                <button class="gen-btn gen-btn-red gen-delete-storage-btn" data-avatar="${avatarFile}" style="padding: 4px 8px; font-size: 0.7rem; flex-shrink: 0;">
+                    <i class="fa-solid fa-eraser"></i> 데이터 삭제
+                </button>
+            </div>
+        `);
+
+        $item.find('.gen-delete-storage-btn').on('click', async function() {
+            const avatar = $(this).data('avatar');
+            const confirm = await callGenericPopup(
+                `'${displayName}' 캐릭터의 모든 저장된 데이터(외형 프롬프트 및 연동 설정)를 삭제하시겠습니까?`,
+                POPUP_TYPE.CONFIRM
+            );
+            if (confirm) {
+                delete extension_settings[extensionName].characterPrompts[avatar];
+                delete extension_settings[extensionName].linkedPresets[avatar];
+                saveSettingsDebounced();
+                renderStorageManagementList();
+                renderCharacterLinkUI(); 
+                renderCharacterPrompts(); 
+                toastr.success(`${displayName} 데이터 삭제 완료`);
+            }
+        });
+
+        $container.append($item);
+    });
+}
 function updatePresetSelect(forceSelectedName = null) {
     const select = $('#prompt_preset_select');
     if (!select.length) return;
@@ -482,19 +664,36 @@ function updatePresetSelect(forceSelectedName = null) {
 
 function getFinalPrompt() {
     const context = getContext();
-    const charId = context.characterId;
-
+    const charId = context.characterId ?? (characters.findIndex(c => c.avatar === context.character?.avatar));
     let finalPrompt = extension_settings[extensionName].promptInjection.prompt;
 
-    if (charId && characters[charId]) {
+    if (charId !== undefined && charId !== -1 && characters[charId]) {
         const avatarFile = characters[charId].avatar;
         const linkedPresetName = extension_settings[extensionName].linkedPresets[avatarFile];
-        
+
         if (linkedPresetName && extension_settings[extensionName].promptPresets[linkedPresetName]) {
             finalPrompt = extension_settings[extensionName].promptPresets[linkedPresetName];
-            console.log(`[AutoPic] 캐릭터 '${characters[charId].name}'에 연동된 프리셋 '${linkedPresetName}' 적용.`);
+        }
+
+        const charData = extension_settings[extensionName].characterPrompts[avatarFile] || [];
+
+        for (let i = 1; i <= 6; i++) {
+            const placeholder = `{autopic_char${i}}`;
+            const item = charData[i - 1];
+            let replacement = "";
+
+            if (item && item.enabled !== false && item.prompt && item.prompt.trim()) {
+                replacement = item.prompt;
+            }
+
+            finalPrompt = finalPrompt.split(placeholder).join(replacement);
+        }
+    } else {
+        for (let i = 1; i <= 6; i++) {
+            finalPrompt = finalPrompt.split(`{autopic_char${i}}`).join("");
         }
     }
+
     return finalPrompt;
 }
 
@@ -678,27 +877,40 @@ $(function () {
                     opacity: 0.6;
                 }
                 
+                .mes_img_swipe_left, .mes_img_swipe_right {
+                    min-width: 40px !important;
+                    min-height: 40px !important;
+                    display: flex !important;
+                    align-items: center !important;
+                    justify-content: center !important;
+                    cursor: pointer !important;
+                    pointer-events: auto !important;
+                    z-index: 1001 !important;
+                }
+
                 @media (max-width: 1000px) {
                     .mes_media_wrapper {
                         margin-bottom: 45px !important;
                     }
 
                     .mes_img_swipes {
-                        opacity: 1 !important;
-                        pointer-events: auto !important;
+                        opacity: 0 !important;   
+                        pointer-events: none !important;
                         z-index: 1000 !important;
+                        background: none !important;  
+                        border-radius: 0 !important; 
+                        padding: 0 !important;        
+                        transition: opacity 0.15s ease-in-out !important;
                     }
 
-                    .mes_img_swipe_counter {
-                        font-size: 0.75rem !important;
+                    .mes_media_container.ui-active .mes_img_swipes,
+                    .mes_media_container.ui-active .mes_img_controls {
                         opacity: 1 !important;
-                        display: block !important;
-                        visibility: visible !important;
+                        pointer-events: auto !important;
                     }
 
                     .mes_img_swipe_left, .mes_img_swipe_right {
-                        opacity: 0.1 !important; 
-                        pointer-events: auto !important;
+                        opacity: 0.2 !important;
                         transition: opacity 0.2s !important;
                     }
 
@@ -707,7 +919,7 @@ $(function () {
                         opacity: 1 !important;
                     }
                 }
-
+                }
                 @media (min-width: 1000px) {
                     .mobile-ui-toggle { display: none; }
                 }
@@ -718,19 +930,90 @@ $(function () {
 				/* ===============================
 				   5. 태그 치환 모드 이미지 스타일 (Autopic 전용 클래스 적용)
 				================================ */
-				.mes_text img {
+				.mes_text img[data-autopic-id],
+				.autopic-tag-img-wrapper img,
+				.mes_text img[title*="Character"],
+				.mes_text img[title*="indoors"] {
 					border-radius: 12px !important;
-					margin: 10px 0 !important;
+					margin: 10px auto !important;
 					display: block !important;
 					max-width: 100% !important;
 					height: auto !important;
 					box-shadow: 0 4px 15px rgba(0,0,0,0.3) !important;
-					border: 1px solid #333336 !important;
-					transition: transform 0.2s ease;
+					border: 1px solid var(--ap-border, #333336) !important;
+					transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.25s ease !important;
+					cursor: pointer;
+					position: relative;
+					z-index: 1;
 				}
 
-				.mes_text img:hover {
-					transform: scale(1.01);
+				/* 2. Hover 상태: 마우스를 올렸을 때 살짝 확대 및 그림자 강조 */
+				.mes_text img[data-autopic-id]:hover,
+				.autopic-tag-img-wrapper img:hover,
+				.mes_text img[title*="Character"]:hover,
+				.mes_text img[title*="indoors"]:hover {
+					transform: scale(1.01) !important; 
+					box-shadow: 0 8px 25px rgba(0,0,0,0.5) !important;
+					z-index: 5 !important; 
+				}
+
+				.autopic-tag-img-wrapper {
+					position: relative;
+					display: block;
+					max-width: fit-content;
+					margin: 12px auto !important;
+					overflow: visible !important; 
+				}
+
+				.autopic-tag-controls {
+					position: absolute;
+					top: 10px;
+					right: 12px;
+					display: flex;
+					gap: 6px;
+					opacity: 0;
+					transition: opacity 0.2s ease;
+					z-index: 10;
+					pointer-events: none;
+				}
+
+				.autopic-tag-img-wrapper:hover .autopic-tag-controls,
+				.autopic-tag-img-wrapper.ui-active .autopic-tag-controls {
+					opacity: 1;
+					pointer-events: auto;
+				}
+
+				.autopic-control-btn {
+					background: rgba(0, 0, 0, 0.5) !important;
+					backdrop-filter: blur(4px);
+					border-radius: 8px !important;
+					width: 34px !important;
+					height: 34px !important;
+					display: flex !important;
+					align-items: center !important;
+					justify-content: center !important;
+					color: white !important;
+					font-size: 16px !important;
+					text-shadow: 0 1px 3px rgba(0,0,0,0.8) !important;
+					cursor: pointer;
+					border: 1px solid rgba(255,255,255,0.2) !important;
+					padding: 0 !important;
+				}
+
+				.autopic-control-btn:hover {
+					color: var(--ap-accent, #4a90e2) !important;
+					background: rgba(0, 0, 0, 0.8) !important;
+					transform: scale(1.1) !important;
+				}
+
+				@media (max-width: 1000px) {
+					.autopic-tag-controls { opacity: 0 !important; }
+					.autopic-tag-img-wrapper.ui-active .autopic-tag-controls { opacity: 1 !important; }
+				}
+					.autopic-tag-img-wrapper.ui-active .autopic-tag-controls {
+						opacity: 1 !important;
+						pointer-events: auto !important;
+					}
 				}
             </style>
         `);
@@ -742,6 +1025,7 @@ $(function () {
             <div class="fa-solid fa-robot"></div>
             <span data-i18n="AutoPic">AutoPic</span>
         </div>`);
+		renderCharacterPrompts();
 
         $('#autopic_menu_item').off('click').on('click', onExtensionButtonClick);
 
@@ -751,7 +1035,7 @@ $(function () {
 
         $('#extensions-settings-button').on('click', () => setTimeout(updateUI, 200));
 
-        eventSource.on(event_types.MESSAGE_RENDERED, (mesId) => {
+		eventSource.on(event_types.MESSAGE_RENDERED, (mesId) => {
             const context = getContext();
             const message = context.chat[mesId];
             if (message && !message.is_user && !message.extra?.title) {
@@ -765,6 +1049,8 @@ $(function () {
             }
             addRerollButtonToMessage(mesId);
             addMobileToggleToMessage(mesId);
+            attachSwipeRerollListeners(mesId);
+            setTimeout(() => attachTagControls(mesId), 150);
         });
 
         eventSource.on(event_types.MESSAGE_UPDATED, (mesId) => {
@@ -781,47 +1067,81 @@ $(function () {
             }
             addRerollButtonToMessage(mesId);
             addMobileToggleToMessage(mesId);
+            attachSwipeRerollListeners(mesId);
+            setTimeout(() => attachTagControls(mesId), 150);
         });
 
-        eventSource.on(event_types.CHAT_CHANGED, () => renderCharacterLinkUI());
+        eventSource.on(event_types.CHAT_CHANGED, () => {
+			renderCharacterLinkUI();
+			renderCharacterPrompts();
+		});
 
         /* -------------------------------------------------------
          * 모바일 전용: 돋보기 차단 및 UI 토글 로직 (Capture phase)
          * ------------------------------------------------------- */
         document.addEventListener('click', function (e) {
-            if (window.innerWidth >= 1000) return;
-
             const target = e.target;
-            const $mediaContainer = $(target).closest('.mes_media_container');
+            const $mediaContainer = $(target).closest('.mes_media_container, .autopic-tag-img-wrapper');
             
             if ($mediaContainer.length === 0) {
-                $('.mes_media_container.ui-active').removeClass('ui-active');
+                $('.mes_media_container.ui-active, .autopic-tag-img-wrapper.ui-active').removeClass('ui-active');
                 return;
             }
 
-            const isButton = $(target).closest('.mes_img_controls, .mes_img_swipes, .mobile-ui-toggle').length > 0;
+            const isButton = $(target).closest('.right_menu_button, .mes_img_controls, .mes_img_swipes, .mobile-ui-toggle, .autopic-control-btn, .autopic-tag-controls, .reroll-trigger').length > 0;
 
-            if (!$mediaContainer.hasClass('ui-active')) {
-                e.stopImmediatePropagation();
-                e.preventDefault();
-                $('.mes_media_container.ui-active').removeClass('ui-active');
-                $mediaContainer.addClass('ui-active');
-            } else {
+            if (window.innerWidth < 1000 && !$mediaContainer.hasClass('ui-active')) {
                 if (!isButton) {
                     e.stopImmediatePropagation();
                     e.preventDefault();
-                    $mediaContainer.removeClass('ui-active');
+                    $('.mes_media_container.ui-active, .autopic-tag-img-wrapper.ui-active').removeClass('ui-active');
+                    $mediaContainer.addClass('ui-active');
                 }
+                return;
             }
+
+            if (window.innerWidth < 1000 && $mediaContainer.hasClass('ui-active') && !isButton) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+                $mediaContainer.removeClass('ui-active');
+            }
+            
         }, true);
 
-        $(document).on('click', '.image-reroll-button', function (e) {
+        $(document).off('click', '.image-reroll-button, .mes_img_swipe_counter').on('click', '.image-reroll-button, .mes_img_swipe_counter', function (e) {
+            if ($(this).hasClass('mes_img_swipe_counter')) {
+                e.stopPropagation();
+                e.preventDefault();
+            }
+
             const messageBlock = $(this).closest('.mes');
             const mesId = messageBlock.attr('mesid');
+            
             let $visibleImg = messageBlock.find('.mes_img_container:not([style*="display: none"]) img.mes_img');
+            
             if ($visibleImg.length === 0) $visibleImg = messageBlock.find('img.mes_img').first();
+            
             const imgTitle = $visibleImg.attr('title') || $visibleImg.attr('alt') || "";
+            
             handleReroll(mesId, imgTitle);
+        });
+
+        $(document).off('click', '.reroll-trigger').on('click', '.reroll-trigger', function(e) {
+            e.preventDefault(); 
+            e.stopPropagation();
+            const mesId = $(this).data('mesid');
+            const prompt = $(this).data('prompt');
+            handleReroll(mesId, prompt);
+        });
+        $(document).on('click', '.swipe_left, .swipe_right', function () {
+            const $message = $(this).closest('.mes');
+            const mesId = $message.attr('mesid');
+            
+            if (mesId !== undefined) {
+                setTimeout(() => {
+                    attachTagControls(mesId);
+                }, 150);
+            }
         });
 
     })();
@@ -879,7 +1199,7 @@ async function handleLastImageReroll() {
     const chat = context.chat;
     
     const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
-    const imgRegex = /<img[^>]*\stitle="([^"]*)"[^>]*?>/g;
+    const imgRegex = /<img[^>]+>/g;
 
     for (let i = chat.length - 1; i >= 0; i--) {
         const message = chat[i];
@@ -887,15 +1207,15 @@ async function handleLastImageReroll() {
 
         const hasPic = message.mes.match(picRegex);
         const hasImg = message.mes.match(imgRegex);
+        const hasExtra = message.extra && (message.extra.image || message.extra.image_swipes);
 
-        if (hasPic || hasImg) {
-            handleReroll(i, ""); 
-            return;
-        }
-
-        if (message.extra && (message.extra.image || message.extra.image_swipes)) {
-            const currentTitle = message.extra.title || "";
-            handleReroll(i, currentTitle);
+        if (hasPic || hasImg || hasExtra) {
+            let prompt = message.extra?.title || "";
+            if (!prompt && hasImg) {
+                const match = message.mes.match(/title="([^"]*)"/);
+                if (match) prompt = match[1];
+            }
+            handleReroll(i, prompt);
             return;
         }
     }
@@ -926,6 +1246,55 @@ function addMobileToggleToMessage(mesId) {
         }
     });
 }
+
+/**
+ * 스와이프 버튼 및 카운터 클릭 시 리롤 모달을 강제로 연결하는 함수
+ */
+function attachSwipeRerollListeners(mesId) {
+    const $message = $(`.mes[mesid="${mesId}"]`);
+    
+    const $swipeControls = $message.find('.mes_img_swipe_left, .mes_img_swipe_right, .mes_img_swipe_counter');
+    
+    $swipeControls.off('click.autopic').on('click.autopic', function (e) {
+        const $counter = $message.find('.mes_img_swipe_counter');
+        const counterText = $counter.text().trim(); // 예: "1/1" 또는 "2/3"
+        
+        const parts = counterText.split('/');
+        if (parts.length !== 2) return;
+        
+        const current = parseInt(parts[0]);
+        const total = parseInt(parts[1]);
+        
+        const isLeftArrow = $(this).hasClass('mes_img_swipe_left');
+        const isRightArrow = $(this).hasClass('mes_img_swipe_right');
+        const isCounter = $(this).hasClass('mes_img_swipe_counter');
+
+        let shouldTriggerReroll = false;
+
+        if (isCounter) {
+            shouldTriggerReroll = true;
+        } 
+        else if (isLeftArrow && current === 1) {
+            shouldTriggerReroll = true;
+        } 
+        else if (isRightArrow && current === total) {
+            shouldTriggerReroll = true;
+        }
+
+        if (shouldTriggerReroll) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            let $visibleImg = $message.find('.mes_img_container:not([style*="display: none"]) img.mes_img');
+            if ($visibleImg.length === 0) $visibleImg = $message.find('img.mes_img').first();
+            
+            const imgTitle = $visibleImg.attr('title') || $visibleImg.attr('alt') || "";
+            
+            handleReroll(mesId, imgTitle);
+        }
+
+    });
+}
 async function handleReroll(mesId, currentPrompt) {
     if (!SlashCommandParser.commands['sd']) {
         toastr.error("Stable Diffusion extension not loaded.");
@@ -937,9 +1306,8 @@ async function handleReroll(mesId, currentPrompt) {
     if (!message) return;
 
     const currentInsertType = extension_settings[extensionName].insertType;
-
     const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
-    const imgRegex = /<img[^>]*\ssrc="([^"]*)"[^>]*\stitle="([^"]*)"[^>]*?>/g;
+    const imgRegex = /<img[^>]+>/g;
     
     let foundItems = []; 
 
@@ -950,7 +1318,12 @@ async function handleReroll(mesId, currentPrompt) {
 
     let imgMatches = [...message.mes.matchAll(imgRegex)];
     imgMatches.forEach(m => {
-        foundItems.push({ originalTag: m[0], prompt: m[2], type: 'tag' });
+        const fullTag = m[0];
+        const titleMatch = fullTag.match(/title="([^"]*)"/);
+        const prompt = titleMatch ? titleMatch[1] : "";
+        if (fullTag.includes('data-autopic-id')) {
+            foundItems.push({ originalTag: fullTag, prompt: prompt, type: 'tag' });
+        }
     });
 
     if (message.extra && message.extra.image_swipes && message.extra.image_swipes.length > 0) {
@@ -963,11 +1336,8 @@ async function handleReroll(mesId, currentPrompt) {
         });
     }
 
-    if (foundItems.length === 0 && currentPrompt) {
-        foundItems.push({ originalTag: null, prompt: currentPrompt, type: 'extra' });
-    }
     if (foundItems.length === 0) {
-        foundItems.push({ originalTag: null, prompt: "", type: 'extra' });
+        foundItems.push({ originalTag: null, prompt: currentPrompt || "", type: 'extra' });
     }
 
     let selectedIdx = 0;
@@ -1001,6 +1371,7 @@ async function handleReroll(mesId, currentPrompt) {
 
     const result = await callGenericPopup(popupHtml, POPUP_TYPE.CONFIRM, '', { okButton: 'Generate', cancelButton: 'Cancel' });
 
+    // 리스너 해제
     $(document).off('change', '.reroll_radio');
     $(document).off('input', '.reroll_textarea');
 
@@ -1014,30 +1385,27 @@ async function handleReroll(mesId, currentPrompt) {
                 const resultUrl = await SlashCommandParser.commands['sd'].callback({ quiet: 'true' }, finalPrompt.trim());
                 
                 if (typeof resultUrl === 'string' && !resultUrl.startsWith('Error')) {
-                    
-                    if (currentInsertType === INSERT_TYPE.REPLACE && targetItem.originalTag) {
-                        const newTag = `<img src="${escapeHtmlAttribute(resultUrl)}" title="${escapeHtmlAttribute(finalPrompt.trim())}" alt="${escapeHtmlAttribute(finalPrompt.trim())}">`;
+                    if (targetItem.originalTag) {
+                        const idMatch = targetItem.originalTag.match(/data-autopic-id="([^"]*)"/);
+                        const idAttr = idMatch ? ` data-autopic-id="${idMatch[1]}"` : ` data-autopic-id="tag-${Date.now()}"`;
+                        const newTag = `<img src="${escapeHtmlAttribute(resultUrl)}"${idAttr} title="${escapeHtmlAttribute(finalPrompt.trim())}" alt="${escapeHtmlAttribute(finalPrompt.trim())}">`;
                         message.mes = message.mes.replace(targetItem.originalTag, newTag);
-                    } 
-                    else {
+                    } else {
                         if (!message.extra) message.extra = {};
                         if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
-
+                        
                         if (targetItem.swipeIdx !== undefined) {
                             message.extra.image_swipes[targetItem.swipeIdx] = resultUrl;
                         } else {
                             message.extra.image_swipes.push(resultUrl);
                         }
-
                         message.extra.image = resultUrl;
                         message.extra.title = finalPrompt.trim();
                         message.extra.inline_image = true;
                     }
 
                     updateMessageBlock(mesId, message);
-                    const $mesBlock = $(`.mes[mesid="${mesId}"]`);
-                    appendMediaToMessage(message, $mesBlock);
-                    
+                    appendMediaToMessage(message, $(`.mes[mesid="${mesId}"]`));
                     await context.saveChat();
                     
                     await eventSource.emit(event_types.MESSAGE_UPDATED, mesId);
@@ -1049,11 +1417,12 @@ async function handleReroll(mesId, currentPrompt) {
                 }
             } catch (e) { 
                 console.error(e);
-                toastr.error("생성 중 오류 발생."); 
+                toastr.error("이미지 생성 중 오류 발생."); 
             }
         }
     }
 }
+
 function applyTheme(theme) {
     const container = $('#autopic_settings_container');
     if (!container.length) return;
@@ -1121,7 +1490,8 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
                         message.extra.image_swipes.push(result);
                     } 
                     else if (insertType === INSERT_TYPE.REPLACE) {
-                        const newTag = `<img src="${escapeHtmlAttribute(result)}" title="${escapeHtmlAttribute(prompt)}" alt="${escapeHtmlAttribute(prompt)}">`;
+                        const tagId = `tag-${Date.now()}-${i}`; 
+                        const newTag = `<img src="${escapeHtmlAttribute(result)}" data-autopic-id="${tagId}" title="${escapeHtmlAttribute(prompt)}" alt="${escapeHtmlAttribute(prompt)}">`;
                         updatedMes = updatedMes.replace(fullTag, () => newTag);
                     }
                 } else {
@@ -1154,4 +1524,88 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
             toastr.error("이미지 생성 과정에서 오류가 발생했습니다.");
         }
     }, 200);
+});
+
+async function attachTagControls(mesId) {
+    const context = getContext();
+    const message = context.chat[mesId];
+    if (!message || message.is_user) return;
+
+    const $mesBlock = $(`.mes[mesid="${mesId}"]`);
+    const $images = $mesBlock.find('.mes_text img');
+
+    $images.each(function() {
+        const $img = $(this);
+        
+        if ($img.parent().hasClass('autopic-tag-img-wrapper')) return;
+        
+        const src = $img.attr('src') || "";
+        const title = $img.attr('title') || "";
+        const hasAutopicId = $img.attr('data-autopic-id');
+
+        const isAutopicImg = hasAutopicId || 
+                             title.includes('Character') || 
+                             title.includes('indoors') || 
+                             title.includes('outdoors') ||
+                             (title.split(',').length > 3); 
+
+        if (isAutopicImg && src) {
+            if (!hasAutopicId) {
+                $img.attr('data-autopic-id', `tag-recovered-${Date.now()}`);
+            }
+
+            $img.wrap('<div class="autopic-tag-img-wrapper"></div>');
+            
+            const $controls = $(`
+                <div class="autopic-tag-controls">
+                    <div class="autopic-control-btn reroll-trigger fa-solid fa-rotate interactable" 
+                         data-mesid="${mesId}" 
+                         data-prompt="${escapeHtmlAttribute(title)}" 
+                         title="Generate Another Image"
+                         role="button" 
+                         tabindex="0">
+                    </div>
+                </div>
+            `);
+            $img.after($controls);
+        }
+    });
+}
+/**
+ * 모든 메시지를 검사하여 버튼이 누락된 곳에 부착
+ */
+const initializeAllTagControls = () => {
+    const context = getContext();
+    if (context && context.chat) {
+        const chatLength = context.chat.length;
+        const startIndex = Math.max(0, chatLength - 10);
+        
+        for (let i = startIndex; i < chatLength; i++) {
+            setTimeout(() => attachTagControls(i), (i - startIndex) * 10);
+        }
+    }
+};
+
+eventSource.on(event_types.CHAT_COMPLETED, () => {
+    initializeAllTagControls();
+});
+
+eventSource.on(event_types.CHARACTER_SELECTED, () => {
+    renderCharacterLinkUI();
+    renderCharacterPrompts();
+    initializeAllTagControls();
+});
+
+eventSource.on(event_types.CHAT_CHANGED, () => {
+    renderCharacterLinkUI();
+    renderCharacterPrompts();
+    initializeAllTagControls();
+});
+
+$(document).off('click', '.reroll-trigger').on('click', '.reroll-trigger', function(e) {
+    e.preventDefault(); 
+    e.stopPropagation();
+    const mesId = $(this).data('mesid');
+    const prompt = $(this).data('prompt');
+    handleReroll(mesId, prompt);
 });
