@@ -1305,27 +1305,41 @@ async function handleReroll(mesId, currentPrompt) {
     const message = context.chat[mesId];
     if (!message) return;
 
-    const currentInsertType = extension_settings[extensionName].insertType;
-    const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
-    const imgRegex = /<img[^>]+>/g;
+    const insertType = extension_settings[extensionName].insertType;
+    const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/gi;
+    const imgRegex = /<img[^>]+>/gi;
     
     let foundItems = []; 
 
+    // 1. 본문 내 <pic> 태그 검색
     let picMatches = [...message.mes.matchAll(picRegex)];
     picMatches.forEach(m => {
-        foundItems.push({ originalTag: m[0], prompt: m[1], type: 'tag' });
+        foundItems.push({ 
+            originalTag: m[0], 
+            prompt: m[1], 
+            type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe' 
+        });
     });
 
+    // 2. 본문 내 <img> 태그 검색
     let imgMatches = [...message.mes.matchAll(imgRegex)];
     imgMatches.forEach(m => {
         const fullTag = m[0];
-        const titleMatch = fullTag.match(/title="([^"]*)"/);
+        const titleMatch = fullTag.match(/title="([^"]*)"/i);
         const prompt = titleMatch ? titleMatch[1] : "";
-        if (fullTag.includes('data-autopic-id')) {
-            foundItems.push({ originalTag: fullTag, prompt: prompt, type: 'tag' });
+        
+        if (prompt) {
+            if (!foundItems.some(item => item.originalTag === fullTag)) {
+                foundItems.push({ 
+                    originalTag: fullTag, 
+                    prompt: prompt, 
+                    type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe' 
+                });
+            }
         }
     });
 
+    // 3. 메시지 extra 데이터 (이미 생성된 갤러리 이미지들)
     if (message.extra && message.extra.image_swipes && message.extra.image_swipes.length > 0) {
         message.extra.image_swipes.forEach((src, sIdx) => {
             foundItems.push({ 
@@ -1337,10 +1351,17 @@ async function handleReroll(mesId, currentPrompt) {
     }
 
     if (foundItems.length === 0) {
-        foundItems.push({ originalTag: null, prompt: currentPrompt || "", type: 'extra' });
+        foundItems.push({ 
+            originalTag: null, 
+            prompt: currentPrompt || "", 
+            type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe' 
+        });
     }
 
     let selectedIdx = 0;
+    const initialMatchIdx = foundItems.findIndex(item => item.prompt === currentPrompt);
+    if (initialMatchIdx !== -1) selectedIdx = initialMatchIdx;
+
     let editedPrompts = foundItems.map(item => item.prompt);
 
     let popupHtml = `<div class="reroll_popup_container" style="min-width:300px;">
@@ -1348,12 +1369,13 @@ async function handleReroll(mesId, currentPrompt) {
         <p style="font-size:0.85rem; color:#aaa; margin-bottom:15px;">교체할 이미지를 선택하거나 프롬프트를 수정하세요:</p>`;
     
     foundItems.forEach((item, idx) => {
-        const typeLabel = item.type === 'tag' ? '본문 태그' : (item.type === 'swipe' ? `스와이프 #${item.swipeIdx + 1}` : '기타');
+        const typeLabel = item.type === 'tag' ? '태그 치환 모드' : '메시지에 삽입 모드';
+        const isChecked = idx === selectedIdx ? 'checked' : '';
         popupHtml += `
             <div class="prompt_option_item" style="margin-bottom:15px; padding:12px; background:rgba(0,0,0,0.2); border:1px solid #333; border-radius:8px;">
                 <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;">
-                    <input type="radio" name="reroll_prompt_choice" class="reroll_radio" id="prompt_choice_${idx}" value="${idx}" ${idx === 0 ? 'checked' : ''}>
-                    <label for="prompt_choice_${idx}" style="font-weight:bold; color:#4a90e2; cursor:pointer;">이미지 #${idx + 1} (${typeLabel})</label>
+                    <input type="radio" name="reroll_prompt_choice" class="reroll_radio" id="prompt_choice_${idx}" value="${idx}" ${isChecked}>
+                    <label for="prompt_choice_${idx}" style="font-weight:bold; color:#4a90e2; cursor:pointer;">#${idx + 1} ${typeLabel}</label>
                 </div>
                 <textarea class="reroll_textarea text_pole" data-idx="${idx}" rows="3" style="width: 100%; background:#111; color:#fff; border:1px solid #444; border-radius:5px; padding:8px;">${escapeHtmlAttribute(String(item.prompt))}</textarea>
             </div>
@@ -1371,7 +1393,6 @@ async function handleReroll(mesId, currentPrompt) {
 
     const result = await callGenericPopup(popupHtml, POPUP_TYPE.CONFIRM, '', { okButton: 'Generate', cancelButton: 'Cancel' });
 
-    // 리스너 해제
     $(document).off('change', '.reroll_radio');
     $(document).off('input', '.reroll_textarea');
 
@@ -1385,12 +1406,17 @@ async function handleReroll(mesId, currentPrompt) {
                 const resultUrl = await SlashCommandParser.commands['sd'].callback({ quiet: 'true' }, finalPrompt.trim());
                 
                 if (typeof resultUrl === 'string' && !resultUrl.startsWith('Error')) {
-                    if (targetItem.originalTag) {
+                    const currentInsertType = extension_settings[extensionName].insertType;
+
+                    // [핵심 수정] 태그 치환 모드일 때만 본문(message.mes)을 수정함
+                    if (currentInsertType === INSERT_TYPE.REPLACE && targetItem.originalTag) {
                         const idMatch = targetItem.originalTag.match(/data-autopic-id="([^"]*)"/);
                         const idAttr = idMatch ? ` data-autopic-id="${idMatch[1]}"` : ` data-autopic-id="tag-${Date.now()}"`;
                         const newTag = `<img src="${escapeHtmlAttribute(resultUrl)}"${idAttr} title="${escapeHtmlAttribute(finalPrompt.trim())}" alt="${escapeHtmlAttribute(finalPrompt.trim())}">`;
                         message.mes = message.mes.replace(targetItem.originalTag, newTag);
-                    } else {
+                    } 
+                    // [핵심 수정] 그 외(INLINE 등) 모드에서는 본문은 절대 건드리지 않고 갤러리(extra)만 수정
+                    else {
                         if (!message.extra) message.extra = {};
                         if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
                         
@@ -1544,10 +1570,10 @@ async function attachTagControls(mesId) {
         const hasAutopicId = $img.attr('data-autopic-id');
 
         const isAutopicImg = hasAutopicId || 
-                             title.includes('Character') || 
-                             title.includes('indoors') || 
-                             title.includes('outdoors') ||
-                             (title.split(',').length > 3); 
+                             (title && (title.includes('Character') || 
+                                        title.includes('indoors') || 
+                                        title.includes('outdoors') ||
+                                        title.split(',').length > 3)); 
 
         if (isAutopicImg && src) {
             if (!hasAutopicId) {
