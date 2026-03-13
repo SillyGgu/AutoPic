@@ -59,6 +59,42 @@
                     <input id="prompt_injection_depth" class="gen-custom-input" type="number" min="0" max="100" style="width: 80px;">
                 </div>
             </div>
+
+            <!-- ★ NAI cfg_rescale 카드 -->
+            <div class="image-gen-card" id="nai-params-card">
+                <h3 class="gen-section-title">🎛️ NovelAI 파라미터</h3>
+                <p style="font-size: 0.8rem; color: var(--ap-text-vague); margin-bottom: 15px; line-height: 1.4;">
+                    ST의 이미지 생성 소스가 <b>NovelAI</b>일 때만 동작합니다.<br>
+                    <span style="color: var(--ap-text-vague);">⚠️ 활성화 시 AutoPic <b>서버 플러그인</b> 설치가 필요합니다.</span>
+                </p>
+                <!-- NAI Rescale 사용 여부 토글 -->
+                <div style="margin-bottom: 18px; padding: 12px; background: var(--ap-bg-input); border-radius: 8px; border: 1px solid var(--ap-border);">
+                    <label class="gen-checkbox-label" for="nai_use_rescale">
+                        <input type="checkbox" id="nai_use_rescale">
+                        <span>
+                            NAI Rescale 사용
+                            <small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
+                                끄면 서버 플러그인 없이도 사용 가능합니다.
+                            </small>
+                        </span>
+                    </label>
+                </div>
+                <!-- cfg_rescale -->
+                <div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+                        <label style="font-size:0.85rem; font-weight:bold;">
+                            Prompt Guidance Rescale
+                        </label>
+                        <span id="nai_cfg_rescale_display" style="font-size:0.9rem; font-weight:bold; color: var(--ap-accent); min-width:32px; text-align:right;">0.00</span>
+                    </div>
+                    <input type="range" id="nai_cfg_rescale" class="neo-range-slider"
+                        min="0" max="1" step="0.01" value="0"
+                        style="width:100%; accent-color: var(--ap-accent);">
+                    <p style="font-size: 0.75rem; color: var(--ap-text-vague); margin-top: 5px; line-height: 1.4;">
+                        CFG Scale이 높을 때 색상 과포화를 방지합니다. <b>0 = 비활성</b>, CFG 7~10이면 0.3~0.5 권장.
+                    </p>
+                </div>
+            </div>
         </div>
 
         <div id="tab-gen-templates" class="image-gen-tab-content">
@@ -154,7 +190,6 @@
 				</div>
 			</div>
 		</div>
-
     </div>
 </div>
 
@@ -331,5 +366,22 @@
 @media screen and (max-width: 500px) {
     #autopic_settings_container .flex-container.flexnowrap { flex-wrap: wrap !important; gap: 8px !important; }
     #autopic_settings_container .gen-custom-input { width: 100%; } /* !important 제거하여 수동 리사이징 우선권 부여 */
+}
+/* NAI Rescale 슬라이더 비활성 상태 */
+#nai_cfg_rescale:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+}
+
+.ap-manual-gen-btn {
+    color: var(--ap-accent, #4a90e2); /* AutoPic의 포인트 컬러 사용 */
+    cursor: pointer;
+    opacity: 0.8;
+    transition: opacity 0.2s;
+}
+
+.ap-manual-gen-btn:hover {
+    opacity: 1;
+    transform: scale(1.1);
 }
 </style>

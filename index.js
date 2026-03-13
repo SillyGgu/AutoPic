@@ -15,6 +15,62 @@ import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 const extensionName = 'AutoPic';
 const extensionFolderPath = `/scripts/extensions/third-party/${extensionName}`;
 
+// ── NAI fetch 인터셉터 ────────────────────────────────────────
+// ST의 /api/novelai/generate-image 요청을 가로채서
+// AutoPic 프록시(/api/plugins/autopic/generate-image)로 리다이렉트한다.
+// 프록시는 cfg_rescale을 포함해 NAI API에 전달한다.
+(function installNaiFetchInterceptor() {
+    const _fetch = window.fetch.bind(window);
+    window.fetch = async function (input, init, ...rest) {
+        const url = typeof input === 'string' ? input
+            : (input instanceof Request ? input.url : String(input));
+
+        if (url.includes('/api/novelai/generate-image') && init?.body && getNaiParams()?.useNaiRescale) {
+            try {
+                const body = JSON.parse(init.body);
+                const cfg  = getNaiParams()?.cfg_rescale ?? 0;
+
+                body.cfg_rescale = cfg;
+                console.log('[AutoPic Interceptor] cfg_rescale 주입:', cfg, '→ 프록시로 리다이렉트');
+
+                const newInit = { ...init, body: JSON.stringify(body) };
+                const proxyResponse = await _fetch('/api/plugins/autopic/generate-image', newInit, ...rest);
+
+                // 프록시 응답을 클론해서 PROHIBITED_CONTENT 여부 확인
+                const cloned = proxyResponse.clone();
+                try {
+                    const json = await cloned.json();
+                    if (json && json.statusCode === 400 && json.message && json.message.includes('PROHIBITED_CONTENT')) {
+                        console.warn('[AutoPic Interceptor] PROHIBITED_CONTENT 감지 → 원본 경로로 fallback 재시도');
+                        return _fetch(input, init, ...rest);
+                    }
+                } catch (_) {
+                    // JSON 파싱 실패 시 그냥 원본 응답 반환
+                }
+
+                return proxyResponse;
+            } catch (e) {
+                console.warn('[AutoPic Interceptor] 파싱 실패, 원본 요청 통과:', e);
+            }
+        }
+
+        return _fetch(input, init, ...rest);
+    };
+})();
+// ─────────────────────────────────────────────────────────────
+
+// ── NAI cfg_rescale 파라미터 ──────────────────────────────────
+const NAI_DEFAULTS = { cfg_rescale: 0.0, useNaiRescale: false };
+
+function getNaiParams() {
+    const s = extension_settings[extensionName];
+    if (!s.naiParams) s.naiParams = { ...NAI_DEFAULTS };
+    for (const [k, v] of Object.entries(NAI_DEFAULTS)) {
+        if (s.naiParams[k] === undefined) s.naiParams[k] = v;
+    }
+    return s.naiParams;
+}
+// ─────────────────────────────────────────────────────────────
 
 const INSERT_TYPE = {
     DISABLED: 'disabled',
@@ -52,7 +108,8 @@ const defaultAutoPicSettings = {
         "Default": `<image_generation>\nYou must insert a <pic prompt="example prompt"> at end of the reply. Prompts are used for stable diffusion image generation, based on the plot and character to output appropriate prompts to generate captivating images.\n</image_generation>`
     },
     linkedPresets: {},
-    characterPrompts: {}
+    characterPrompts: {},
+    naiParams: { ...NAI_DEFAULTS },
 };
 function updateUI() {
     $('#autopic_menu_item').toggleClass(
@@ -78,6 +135,14 @@ function updateUI() {
         $('#prompt_injection_position').val(extension_settings[extensionName].promptInjection.position);
         $('#prompt_injection_depth').val(extension_settings[extensionName].promptInjection.depth);
         
+        // NAI cfg_rescale UI 업데이트
+        const nai = getNaiParams();
+        $('#nai_use_rescale').prop('checked', !!nai.useNaiRescale);
+        $('#nai_cfg_rescale').val(nai.cfg_rescale).prop('disabled', !nai.useNaiRescale);
+        $('#nai_cfg_rescale_display').text(Number(nai.cfg_rescale).toFixed(2));
+        // NAI Rescale 비활성화 시 카드 흐리게
+        $('#nai-params-card').css('opacity', nai.useNaiRescale && extension_settings?.sd?.source === 'novel' ? '1' : '0.5');
+
         $('.theme-dot').removeClass('active');
         $(`.theme-dot[data-theme="${currentTheme}"]`).addClass('active');
     }
@@ -110,6 +175,19 @@ async function loadSettings() {
         }
         if (!extension_settings[extensionName].linkedPresets) {
             extension_settings[extensionName].linkedPresets = {};
+        }
+        // naiParams 초기화
+        if (!extension_settings[extensionName].naiParams) {
+            extension_settings[extensionName].naiParams = { ...NAI_DEFAULTS };
+        } else {
+            for (const [k, v] of Object.entries(NAI_DEFAULTS)) {
+                if (extension_settings[extensionName].naiParams[k] === undefined)
+                    extension_settings[extensionName].naiParams[k] = v;
+            }
+            // 구버전 호환: useNaiRescale이 없던 시절 저장된 경우 기본 false
+            if (extension_settings[extensionName].naiParams.useNaiRescale === undefined) {
+                extension_settings[extensionName].naiParams.useNaiRescale = false;
+            }
         }
     }
     updateUI();
@@ -325,6 +403,25 @@ async function createSettings(settingsHtml) {
         extension_settings[extensionName].promptInjection.depth = isNaN(value) ? 0 : value;
         saveSettingsDebounced();
     });
+
+    // ── NAI cfg_rescale 바인딩 ────────────────────────────────
+    $('#nai_use_rescale').on('change', function() {
+        const enabled = $(this).prop('checked');
+        getNaiParams().useNaiRescale = enabled;
+        $('#nai_cfg_rescale').prop('disabled', !enabled);
+        updateUI();
+        saveSettingsDebounced();
+        if (enabled) {
+            toastr.info('NAI Rescale 활성화: AutoPic 서버 플러그인이 필요합니다.');
+        }
+    });
+    $('#nai_cfg_rescale').on('input', function() {
+        const val = parseFloat($(this).val());
+        getNaiParams().cfg_rescale = isNaN(val) ? 0 : val;
+        $('#nai_cfg_rescale_display').text(getNaiParams().cfg_rescale.toFixed(2));
+        saveSettingsDebounced();
+    });
+    // ─────────────────────────────────────────────────────────
 
     updateUI();
 }
@@ -711,7 +808,8 @@ eventSource.on(
             const role = extension_settings[extensionName].promptInjection.position.replace('deep_', '') || 'system';
 
             if (depth === 0) {
-                eventData.chat.push({ role: role, content: prompt });
+                // depth=0이면 system 프롬프트를 맨 앞(index 0)에 삽입
+                eventData.chat.unshift({ role: role, content: prompt });
             } else {
                 eventData.chat.splice(-depth, 0, { role: role, content: prompt });
             }
@@ -1403,7 +1501,7 @@ async function handleReroll(mesId, currentPrompt) {
         if (finalPrompt && finalPrompt.trim()) {
             try {
                 toastr.info("이미지 생성 중...");
-                const resultUrl = await SlashCommandParser.commands['sd'].callback({ quiet: 'true' }, finalPrompt.trim());
+                const resultUrl = await sdCallWithRescale({ quiet: 'true' }, finalPrompt.trim());
                 
                 if (typeof resultUrl === 'string' && !resultUrl.startsWith('Error')) {
                     const currentInsertType = extension_settings[extensionName].insertType;
@@ -1447,6 +1545,16 @@ async function handleReroll(mesId, currentPrompt) {
             }
         }
     }
+}
+
+/**
+ * /sd 커맨드 실행.
+ * cfg_rescale은 fetch 인터셉터(installNaiFetchInterceptor)가
+ * /api/novelai/generate-image 요청을 가로채서 자동으로 주입하므로
+ * 여기서는 별도 처리가 필요 없다.
+ */
+async function sdCallWithRescale(args, prompt) {
+    return await SlashCommandParser.commands['sd'].callback(args, prompt);
 }
 
 function applyTheme(theme) {
@@ -1502,10 +1610,7 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
                 
                 if (!prompt.trim()) continue;
 
-                const result = await SlashCommandParser.commands['sd'].callback(
-                    { quiet: 'true' }, 
-                    prompt.trim()
-                );
+                const result = await sdCallWithRescale({ quiet: 'true' }, prompt.trim());
                 
                 if (typeof result === 'string' && result.trim().length > 0 && !result.startsWith('Error')) {
                     hasChanged = true;
