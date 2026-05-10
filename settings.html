@@ -42,10 +42,6 @@
 
             <div class="image-gen-card">
                 <h3 class="gen-section-title">고급 인젝션 설정</h3>
-                <div style="margin-bottom: 25px;">
-                    <label style="display:block; margin-bottom:5px; margin-top:5px; font-size:0.85rem; color: #cccccc; font-weight: bold;">추출 정규식 (Regex)</label>
-                    <textarea id="prompt_injection_regex" class="gen-custom-input" rows="2" placeholder="예: /<pic[^>]*\sprompt=([^>]*?)>/g"></textarea>
-                </div>
                 <div class="flex-container flexnowrap margin-bottom-15" style="align-items: center; gap: 20px;">
                     <label style="flex-shrink: 0; min-width: 120px;">주입 위치</label>
                     <select id="prompt_injection_position" class="gen-custom-input flex1">
@@ -54,49 +50,97 @@
                         <option value="deep_assistant">AI Assistant</option>
                     </select>
                 </div>
-                <div class="flex-container flexnowrap" style="align-items: center; gap: 20px;">
+                <div class="flex-container flexnowrap margin-bottom-15" style="align-items: center; gap: 20px;">
                     <label style="flex-shrink: 0; min-width: 120px;">주입 깊이 (Depth)</label>
                     <input id="prompt_injection_depth" class="gen-custom-input" type="number" min="0" max="100" style="width: 80px;">
                 </div>
+                <div style="border-top: 1px dashed var(--ap-border); padding-top: 18px; margin-top: 5px; opacity: 0.7;">
+                    <label style="display:block; margin-bottom:5px; font-size:0.85rem; color: #cccccc; font-weight: bold;">
+                        추출 정규식 (Regex)
+                        <span style="font-size: 0.7rem; font-weight: normal; background: var(--ap-accent); color: #ffffff; border-radius: 4px; padding: 2px 7px; margin-left: 6px; vertical-align: middle;">LEGACY</span>
+                    </label>
+                    <p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-bottom: 8px; line-height: 1.5;">
+                        구버전 <code style="background:var(--ap-bg-input); padding: 1px 5px; border-radius: 3px;">&lt;pic prompt="..."&gt;</code> 방식 전용입니다. <code style="background:var(--ap-bg-input); padding: 1px 5px; border-radius: 3px;">&lt;autopic&gt;</code> 사용 시 무시됩니다.
+                    </p>
+                    <textarea id="prompt_injection_regex" class="gen-custom-input" rows="2" placeholder="예: /<pic[^>]*\sprompt=([^>]*?)>/g"></textarea>
+                </div>
             </div>
 
-            <!-- ★ NAI cfg_rescale 카드 -->
-            <div class="image-gen-card" id="nai-params-card">
-                <h3 class="gen-section-title">🎛️ NovelAI 파라미터</h3>
-                <p style="font-size: 0.8rem; color: var(--ap-text-vague); margin-bottom: 15px; line-height: 1.4;">
-                    ST의 이미지 생성 소스가 <b>NovelAI</b>일 때만 동작합니다.<br>
-                    <span style="color: var(--ap-text-vague);">⚠️ 활성화 시 AutoPic <b>서버 플러그인</b> 설치가 필요합니다.</span>
-                </p>
-                <!-- NAI Rescale 사용 여부 토글 -->
-                <div style="margin-bottom: 18px; padding: 12px; background: var(--ap-bg-input); border-radius: 8px; border: 1px solid var(--ap-border);">
-                    <label class="gen-checkbox-label" for="nai_use_rescale">
-                        <input type="checkbox" id="nai_use_rescale">
-                        <span>
-                            NAI Rescale 사용
-                            <small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
-                                끄면 서버 플러그인 없이도 사용 가능합니다.
-                            </small>
-                        </span>
+			<!-- ★ NAI 서버 플러그인 카드 -->
+            <div class="image-gen-card">
+                <h3 class="gen-section-title">수동 이미지 생성</h3>
+                <div class="flex-container flexnowrap" style="margin-bottom: 14px;">
+                    <label class="gen-checkbox-label" for="autopic_manual_enabled">
+                        <input type="checkbox" id="autopic_manual_enabled">
+                        <span>메시지 툴바에 수동 생성 버튼 표시</span>
                     </label>
                 </div>
-                <!-- cfg_rescale -->
-                <div>
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
-                        <label style="font-size:0.85rem; font-weight:bold;">
-                            Prompt Guidance Rescale
-                        </label>
-                        <span id="nai_cfg_rescale_display" style="font-size:0.9rem; font-weight:bold; color: var(--ap-accent); min-width:32px; text-align:right;">0.00</span>
-                    </div>
-                    <input type="range" id="nai_cfg_rescale" class="neo-range-slider"
-                        min="0" max="1" step="0.01" value="0"
-                        style="width:100%; accent-color: var(--ap-accent);">
-                    <p style="font-size: 0.75rem; color: var(--ap-text-vague); margin-top: 5px; line-height: 1.4;">
-                        CFG Scale이 높을 때 색상 과포화를 방지합니다. <b>0 = 비활성</b>, CFG 7~10이면 0.3~0.5 권장.
-                    </p>
+                <div class="flex-container flexnowrap margin-bottom-15" style="align-items: center; gap: 20px;">
+                    <label for="autopic_manual_profile" style="flex-shrink: 0; min-width: 120px;">연결 프로필</label>
+                    <select id="autopic_manual_profile" class="gen-custom-input flex1">
+                        <option value="">연결 프로필 선택</option>
+                    </select>
                 </div>
+                <div class="flex-container flexnowrap" style="align-items: center; gap: 20px;">
+                    <label for="autopic_manual_max_tokens" style="flex-shrink: 0; min-width: 120px;">최대 토큰</label>
+                    <input id="autopic_manual_max_tokens" class="gen-custom-input" type="number" min="128" max="4096" step="1" style="width: 100px;">
+                </div>
+                <p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-top: 10px; line-height: 1.5;">
+                    버튼을 누르면 선택한 Connection Profile이 해당 메시지용 AutoPic 구조화 블록을 만들고, 자동 생성과 같은 이미지 생성 경로로 전송합니다.
+                </p>
             </div>
-        </div>
 
+			<div class="image-gen-card" id="nai-params-card">
+				<h3 class="gen-section-title">🎛️ NovelAI 고급 파라미터</h3>
+				<p style="font-size: 0.8rem; color: var(--ap-text-vague); margin-bottom: 15px; line-height: 1.4;">
+					ST의 이미지 생성 소스가 <b>NovelAI</b>일 때만 동작합니다. Character Prompt, UC, cfg_rescale 등 ST 기본 확장이 미지원하는 NAI v4 전용 기능을 제공합니다.<br>
+					<span style="color: #e07b7b;">⚠️ 아래 기능들은 모두 AutoPic <b>서버 플러그인</b> 설치가 필요합니다. 플러그인 없이 사용하면 이미지 생성이 실패할 수 있습니다.</span>
+				</p>
+				<!-- 서버 플러그인 기능 전체 토글 -->
+				<div style="margin-bottom: 18px; padding: 12px; background: var(--ap-bg-input); border-radius: 8px; border: 1px solid var(--ap-border);">
+					<label class="gen-checkbox-label" for="nai_use_server_plugin">
+						<input type="checkbox" id="nai_use_server_plugin">
+						<span>
+							NAI 서버 플러그인 기능 사용
+							<small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
+								끄면 cfg_rescale, Character Prompt, Character UC를 모두 비활성화합니다. 플러그인 미설치(레거시) 사용자는 반드시 꺼주세요.
+							</small>
+						</span>
+					</label>
+				</div>
+				<!-- cfg_rescale (플러그인 켤 때만 활성) -->
+				<div id="nai_plugin_options" style="opacity:0.4; pointer-events:none;">
+					<div>
+						<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+							<label style="font-size:0.85rem; font-weight:bold;">
+								Prompt Guidance Rescale
+							</label>
+							<span id="nai_cfg_rescale_display" style="font-size:0.9rem; font-weight:bold; color: var(--ap-accent); min-width:32px; text-align:right;">0.00</span>
+						</div>
+						<input type="range" id="nai_cfg_rescale" class="neo-range-slider"
+							min="0" max="1" step="0.01" value="0"
+							style="width:100%; accent-color: var(--ap-accent);">
+						<p style="font-size: 0.75rem; color: var(--ap-text-vague); margin-top: 5px; line-height: 1.4;">
+							CFG Scale이 높을 때 색상 과포화를 방지합니다. <b>0 = 비활성</b>, CFG 7~10이면 0.3~0.5 권장.
+						</p>
+					</div>
+                    <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--ap-border);">
+                        <label class="gen-checkbox-label" for="nai_character_positions_ai_choice">
+                            <input type="checkbox" id="nai_character_positions_ai_choice">
+                            <span>
+                                Character Positions (Global) AI's choice
+                                <small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
+                                    켜면 NAI가 캐릭터 위치를 직접 선택합니다. 끄면 AutoPic이 캐릭터 프롬프트 좌표를 전송합니다.
+                                </small>
+                            </span>
+                        </label>
+                    </div>
+					<p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-top: 10px; line-height: 1.5;">
+						※ 캐릭터 외형 프롬프트 탭에서 등록된 Character Prompt 및 UC도 플러그인이 켜져 있을 때만 NAI에 전송됩니다.
+					</p>
+				</div>
+			</div>
+		</div>
         <div id="tab-gen-templates" class="image-gen-tab-content">
 			<div class="image-gen-card">
 				<h3 class="gen-section-title">템플릿 관리</h3>
@@ -130,11 +174,21 @@
 					</div>
 					<textarea id="prompt_injection_text" class="gen-custom-input" rows="10" placeholder="AI에게 이미지 태그 생성을 지시하는 프롬프트를 입력하세요."></textarea>
 					<div id="character_prompts_section" style="margin-top: 25px; border-top: 1px dashed var(--ap-border); padding-top: 20px;">
-						<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-							<label style="font-size:0.85rem; font-weight:bold; color: var(--ap-accent);">👤 캐릭터 외형 프롬프트 ({autopic_char1~6})</label>
-							<button id="add_char_prompt_btn" class="gen-btn gen-btn-dark" style="padding: 4px 10px; font-size: 0.75rem;">
-								<i class="fa-solid fa-plus"></i> 추가 (최대 6명)
-							</button>
+						<div id="character_prompts_section" style="margin-top: 25px; border-top: 1px dashed var(--ap-border); padding-top: 20px;">
+							<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+								<label style="font-size:0.85rem; font-weight:bold; color: var(--ap-accent);">👤 캐릭터 외형 프롬프트
+									<span style="font-size: 0.7rem; font-weight: normal; background: var(--ap-accent); color: #fff; border-radius: 4px; padding: 2px 7px; margin-left: 6px; vertical-align: middle;">Structured Block</span>
+								</label>
+								<button id="add_char_prompt_btn" class="gen-btn gen-btn-dark" style="padding: 4px 10px; font-size: 0.75rem;">
+									<i class="fa-solid fa-plus"></i> 추가
+								</button>
+							</div>
+							<p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-bottom: 14px; line-height: 1.5;">
+								등록된 캐릭터는 <code style="background:var(--ap-bg-input); padding: 1px 5px; border-radius: 3px;">&lt;apchar ref="이름"&gt;</code> 으로 불러옵니다. 토글 off 시 해당 캐릭터는 비활성화됩니다.<br>
+								<span style="color: var(--ap-text-vague);">※ <code style="background:var(--ap-bg-input); padding: 1px 5px; border-radius: 3px;">{autopic_charN}</code> 플레이스홀더 방식은 레거시입니다. 구버전 템플릿에서만 동작합니다.</span>
+							</p>
+							<div id="char_prompts_list" style="display: flex; flex-direction: column; gap: 15px;">
+								</div>
 						</div>
 						<div id="char_prompts_list" style="display: flex; flex-direction: column; gap: 15px;">
 							</div>
@@ -383,5 +437,13 @@
 .ap-manual-gen-btn:hover {
     opacity: 1;
     transform: scale(1.1);
+}
+
+#autopic_settings_container code {
+    background: var(--ap-bg-item) !important;
+    color: var(--ap-text) !important;
+    border: 1px solid var(--ap-border);
+    padding: 1px 5px;
+    border-radius: 3px;
 }
 </style>

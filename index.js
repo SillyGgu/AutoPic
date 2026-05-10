@@ -10,10 +10,48 @@ import { appendMediaToMessage } from '../../../../script.js';
 import { regexFromString } from '../../../utils.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
+import { ConnectionManagerRequestService } from '../../shared.js';
 
 
 const extensionName = 'AutoPic';
 const extensionFolderPath = `/scripts/extensions/third-party/${extensionName}`;
+
+function getCurrentAutopicCharacterPromptsForNai() {
+    try {
+        const context = getContext();
+        const charId = context.characterId ?? characters.findIndex(c => c.avatar === context.character?.avatar);
+
+        if (charId === undefined || charId === -1 || !characters[charId]) {
+            return [];
+        }
+
+        const avatarFile = characters[charId].avatar;
+        const charData = extension_settings[extensionName]?.characterPrompts?.[avatarFile];
+
+        if (!Array.isArray(charData)) {
+            return [];
+        }
+
+        return charData
+            .map((item, index) => ({
+                name: String(item?.name ?? '').trim(),
+                prompt: String(item?.prompt ?? '').trim(),
+                uc: String(item?.uc ?? '').trim(),
+                enabled: item?.enabled !== false,
+                source: 'autopic',
+                slot: index + 1,
+            }))
+            .filter(item => item.enabled && item.prompt);
+    } catch (error) {
+        console.warn('[AutoPic Interceptor] Failed to collect AutoPic character prompts:', error);
+        return [];
+    }
+}
+
+function shouldUseAutopicNaiProxy() {
+    if (!getNaiParams()?.useServerPlugin) return !!pendingNaiPayload;
+    return !!pendingNaiPayload || !!getNaiParams()?.useNaiRescale || getCurrentAutopicCharacterPromptsForNai().length > 0;
+}
 
 // ── NAI fetch 인터셉터 ────────────────────────────────────────
 // ST의 /api/novelai/generate-image 요청을 가로채서
@@ -25,13 +63,61 @@ const extensionFolderPath = `/scripts/extensions/third-party/${extensionName}`;
         const url = typeof input === 'string' ? input
             : (input instanceof Request ? input.url : String(input));
 
-        if (url.includes('/api/novelai/generate-image') && init?.body && getNaiParams()?.useNaiRescale) {
+        if (url.includes('/api/novelai/generate-image') && init?.body && shouldUseAutopicNaiProxy()) {
             try {
                 const body = JSON.parse(init.body);
-                const cfg  = getNaiParams()?.cfg_rescale ?? 0;
+                const naiParams = getNaiParams();
+                const cfg  = naiParams?.cfg_rescale ?? 0;
+				let autopicCharacterPrompts;
+				if (pendingNaiPayload) {
+					autopicCharacterPrompts = [];
+				} else {
+					// ST 기본 reroll: body.input에 <autopic> 블록이 포함된 경우 직접 파싱
+					const stRerollParsed = (() => {
+						try {
+							const mainPrompt = body.input || body.prompt || '';
+							const parsed = getStructuredRequestsFromText(mainPrompt);
+							if (parsed.length > 0 && parsed[0].naiPayload?.characterPrompts?.length > 0) {
+								return parsed[0].naiPayload;
+							}
+						} catch (_) {}
+						return null;
+					})();
+
+					if (stRerollParsed) {
+						autopicCharacterPrompts = stRerollParsed.characterPrompts;
+						console.log('[AutoPic Interceptor] ST reroll: body.prompt에서 apchar extra prompt 파싱 성공:', autopicCharacterPrompts);
+						// <autopic> 블록을 body.prompt에서 제거하고 scene을 주입
+						const scenePrompt = stRerollParsed.prompt || '';
+						body.prompt = (body.prompt || '').replace(/<autopic\b[^>]*>[\s\S]*?<\/autopic>/gi, '').trim();
+						if (scenePrompt) {
+							body.prompt = body.prompt ? body.prompt + ', ' + scenePrompt : scenePrompt;
+						}
+						console.log('[AutoPic Interceptor] ST reroll: body.prompt에서 <autopic> 제거 및 scene 주입 완료:', scenePrompt);
+					} else {
+						autopicCharacterPrompts = getCurrentAutopicCharacterPromptsForNai();
+					}
+				}
+                const existingCharacterPrompts = Array.isArray(body.characterPrompts) ? body.characterPrompts : [];
+                const pendingCharacterPrompts = Array.isArray(pendingNaiPayload?.characterPrompts)
+                    ? pendingNaiPayload.characterPrompts
+                    : [];
 
                 body.cfg_rescale = cfg;
+                body.character_positions_ai_choice = !!naiParams?.useCharacterPositionsAiChoice;
+                if (pendingNaiPayload?.negative_prompt) {
+                    body.negative_prompt = [body.negative_prompt, pendingNaiPayload.negative_prompt]
+                        .filter(Boolean)
+                        .join(', ');
+                }
+                body.characterPrompts = [
+                    ...existingCharacterPrompts,
+                    ...pendingCharacterPrompts,
+                    ...autopicCharacterPrompts,
+                ];
                 console.log('[AutoPic Interceptor] cfg_rescale 주입:', cfg, '→ 프록시로 리다이렉트');
+
+                console.log('[AutoPic Interceptor] characterPrompts:', body.characterPrompts.length);
 
                 const newInit = { ...init, body: JSON.stringify(body) };
                 const proxyResponse = await _fetch('/api/plugins/autopic/generate-image', newInit, ...rest);
@@ -60,7 +146,17 @@ const extensionFolderPath = `/scripts/extensions/third-party/${extensionName}`;
 // ─────────────────────────────────────────────────────────────
 
 // ── NAI cfg_rescale 파라미터 ──────────────────────────────────
-const NAI_DEFAULTS = { cfg_rescale: 0.0, useNaiRescale: false };
+const NAI_DEFAULTS = {
+    cfg_rescale: 0.0,
+    useNaiRescale: false,
+    useServerPlugin: false,
+    useCharacterPositionsAiChoice: true,
+};
+const MANUAL_DEFAULTS = {
+    enabled: true,
+    profileId: '',
+    maxTokens: 700,
+};
 
 function getNaiParams() {
     const s = extension_settings[extensionName];
@@ -70,6 +166,15 @@ function getNaiParams() {
     }
     return s.naiParams;
 }
+
+function getManualParams() {
+    const s = extension_settings[extensionName];
+    if (!s.manualGeneration) s.manualGeneration = { ...MANUAL_DEFAULTS };
+    for (const [k, v] of Object.entries(MANUAL_DEFAULTS)) {
+        if (s.manualGeneration[k] === undefined) s.manualGeneration[k] = v;
+    }
+    return s.manualGeneration;
+}
 // ─────────────────────────────────────────────────────────────
 
 const INSERT_TYPE = {
@@ -78,6 +183,46 @@ const INSERT_TYPE = {
     NEW_MESSAGE: 'new',
     REPLACE: 'replace',
 };
+
+let pendingNaiPayload = null;
+
+function initializeAllManualButtons() {
+    const context = getContext();
+    if (context && context.chat) {
+        context.chat.forEach((_, index) => addManualGenerateButtonToMessage(index));
+    }
+}
+
+function addManualGenerateButtonToMessage(mesId) {
+    const manual = getManualParams();
+    const $message = $(`.mes[mesid="${mesId}"]`);
+    const message = getContext()?.chat?.[mesId];
+
+    if (!$message.length || !message || message.is_user) return;
+
+    if (!manual.enabled) {
+        $message.find('.autopic-manual-generate-btn').remove();
+        return;
+    }
+
+    if ($message.find('.autopic-manual-generate-btn').length) return;
+
+    const $target = $message.find('.extraMesButtons').first();
+    if (!$target.length) return;
+
+    const $btn = $('<div>')
+        .addClass('mes_button autopic-manual-generate-btn fa-solid fa-image interactable')
+        .attr('title', 'AutoPic 수동 이미지 생성')
+        .css({ opacity: '0.8', 'margin-left': '5px', color: '#4a90e2' })
+        .on('click', async (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const currentId = $btn.closest('.mes').attr('mesid');
+            await handleManualGenerate(currentId !== undefined ? currentId : mesId);
+        });
+
+    $target.append($btn);
+}
 
 /**
  * HTML 속성 값 안전 탈출
@@ -92,6 +237,281 @@ function escapeHtmlAttribute(value) {
         .replace(/>/g, '&gt;');
 }
 
+function decodeHtmlAttribute(value) {
+    if (typeof value !== 'string') return '';
+
+    const textarea = document.createElement('textarea');
+    textarea.innerHTML = value;
+    return textarea.value;
+}
+
+function normalizeRefName(value) {
+    return String(value ?? '').trim().toLowerCase();
+}
+
+function getTagContents(source, tagName) {
+    const regex = new RegExp(`<${tagName}\\b([^>]*)>([\\s\\S]*?)<\\/${tagName}>`, 'gi');
+    return [...String(source ?? '').matchAll(regex)].map(match => ({
+        attrs: match[1] || '',
+        content: decodeHtmlAttribute(match[2] || '').trim(),
+    }));
+}
+
+function getAttrValue(attrs, name) {
+    const regex = new RegExp(`${name}\\s*=\\s*["']([^"']*)["']`, 'i');
+    const match = String(attrs ?? '').match(regex);
+    return match ? decodeHtmlAttribute(match[1]).trim() : '';
+}
+
+function createAutopicImageTag(src, title, idPrefix = 'tag') {
+    const tagId = `${idPrefix}-${Date.now()}`;
+    const titleText = escapeHtmlAttribute(String(title || ''));
+    return `<img src="${escapeHtmlAttribute(src)}" data-autopic-id="${tagId}" title="${titleText}">`;
+}
+
+function findFirstAutopicImageRange(messageText) {
+    const text = String(messageText ?? '');
+    const idMatch = text.match(/data-autopic-id=["'][^"']*["']/i);
+    if (!idMatch) return null;
+
+    const idIndex = idMatch.index ?? -1;
+    const imageStart = idIndex >= 0 ? text.lastIndexOf('<img', idIndex) : -1;
+    if (imageStart < 0) return null;
+
+    const lowerText = text.toLowerCase();
+    const rawAutopicEnd = lowerText.indexOf('</autopic>', idIndex);
+    const escapedAutopicEnd = lowerText.indexOf('&lt;/autopic&gt;', idIndex);
+    let imageEnd = -1;
+
+    if (rawAutopicEnd >= 0) {
+        imageEnd = rawAutopicEnd + '</autopic>'.length;
+    } else if (escapedAutopicEnd >= 0) {
+        imageEnd = escapedAutopicEnd + '&lt;/autopic&gt;'.length;
+    } else {
+        imageEnd = text.indexOf('>', idIndex);
+        if (imageEnd >= 0) imageEnd += 1;
+    }
+
+    if (imageEnd < 0) return null;
+
+    while (text.slice(imageEnd, imageEnd + 2) === '">' || text.slice(imageEnd, imageEnd + 2) === "'>") {
+        imageEnd += 2;
+    }
+    while (text.slice(imageEnd, imageEnd + 10).toLowerCase() === '&quot;&gt;') {
+        imageEnd += 10;
+    }
+
+    return { start: imageStart, end: imageEnd };
+}
+
+function replaceFirstAutopicImageOrAppend(messageText, replacement) {
+    const text = String(messageText ?? '');
+    const value = String(replacement ?? '');
+    const range = findFirstAutopicImageRange(text);
+
+    if (range) {
+        return text.slice(0, range.start) + value + text.slice(range.end);
+    }
+
+    return value ? `${text}${text ? '<br>' : ''}${value}` : text;
+}
+
+function stripAutopicImagesForStructuredScan(messageText) {
+    let text = String(messageText ?? '');
+    let guard = 0;
+
+    while (guard < 20) {
+        const range = findFirstAutopicImageRange(text);
+        if (!range) break;
+        text = text.slice(0, range.start) + text.slice(range.end);
+        guard++;
+    }
+
+    return text;
+}
+
+function getAutopicImageTagById(messageText, autopicId) {
+    const id = String(autopicId ?? '');
+    if (!id) return null;
+
+    const text = String(messageText ?? '');
+    const tempDiv = document.createElement('div');
+
+    for (const match of text.matchAll(/<img\b[^>]*>/gi)) {
+        tempDiv.innerHTML = match[0];
+        const img = tempDiv.querySelector('img');
+        if (img?.getAttribute('data-autopic-id') === id) {
+            return match[0];
+        }
+    }
+
+    return null;
+}
+
+function getAutopicImageRangeById(messageText, autopicId) {
+    const id = String(autopicId ?? '');
+    if (!id) return null;
+
+    const text = String(messageText ?? '');
+    const tempDiv = document.createElement('div');
+
+    for (const match of text.matchAll(/<img\b[^>]*>/gi)) {
+        tempDiv.innerHTML = match[0];
+        const img = tempDiv.querySelector('img');
+        if (img?.getAttribute('data-autopic-id') === id) {
+            return { start: match.index, end: match.index + match[0].length };
+        }
+    }
+
+    return null;
+}
+
+function replaceOrAppendAutopicTag(messageText, fullTag, replacement) {
+    const text = String(messageText ?? '');
+    const value = String(replacement ?? '');
+    const rawTag = String(fullTag ?? '');
+    const escapedTag = rawTag ? escapeHtmlAttribute(rawTag) : '';
+    const idMatch = rawTag.match(/data-autopic-id=["']([^"']*)["']/i);
+
+    if (idMatch?.[1]) {
+        const range = getAutopicImageRangeById(text, idMatch[1]);
+        if (range) {
+            return text.slice(0, range.start) + value + text.slice(range.end);
+        }
+
+        const id = idMatch[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const imageByIdRegex = new RegExp(`<img\\b(?=[\\s\\S]*?data-autopic-id=["']${id}["'])[\\s\\S]*?(?:"?>|&quot;&gt;)`, 'i');
+        if (imageByIdRegex.test(text)) {
+            return text.replace(imageByIdRegex, value);
+        }
+    }
+
+    if (rawTag && text.includes(rawTag)) {
+        return text.replace(rawTag, value);
+    }
+
+    if (escapedTag && text.includes(escapedTag)) {
+        return text.replace(escapedTag, value);
+    }
+
+    const rawAutopicRegex = /<autopic\b[^>]*>[\s\S]*?<\/autopic>/i;
+    if (rawAutopicRegex.test(text)) {
+        return text.replace(rawAutopicRegex, value);
+    }
+
+    const escapedAutopicRegex = /&lt;autopic\b[\s\S]*?&lt;\/autopic&gt;/i;
+    if (escapedAutopicRegex.test(text)) {
+        return text.replace(escapedAutopicRegex, value);
+    }
+
+    const rawPicRegex = /<pic[^>]*\sprompt="[^"]*"[^>]*>/i;
+    if (rawPicRegex.test(text)) {
+        return text.replace(rawPicRegex, value);
+    }
+
+    const escapedPicRegex = /&lt;pic[\s\S]*?&gt;/i;
+    if (escapedPicRegex.test(text)) {
+        return text.replace(escapedPicRegex, value);
+    }
+
+    return value ? `${text}${text ? '<br>' : ''}${value}` : text;
+}
+
+function getCurrentAutopicCharacterLibraryForNai() {
+    const items = getCurrentAutopicCharacterPromptsForNai();
+    const byName = new Map();
+
+    for (const item of items) {
+        if (item.name) {
+            byName.set(normalizeRefName(item.name), item);
+        }
+    }
+
+    return { items, byName };
+}
+
+function parseStructuredPicBlock(fullTag, content) {
+    const scene = getTagContents(content, 'scene').map(item => item.content).filter(Boolean).join(', ');
+    const uc = getTagContents(content, 'uc').map(item => item.content).filter(Boolean).join(', ');
+    const charBlocks = getTagContents(content, 'apchar');
+    const { byName } = getCurrentAutopicCharacterLibraryForNai();
+    const characterPrompts = [];
+
+    for (const block of charBlocks) {
+        const ref = getAttrValue(block.attrs, 'ref') || getAttrValue(block.attrs, 'name');
+        const refKey = normalizeRefName(ref);
+        const extraPrompt = block.content;
+
+        if (refKey && byName.has(refKey)) {
+            const baseCharacter = byName.get(refKey);
+            characterPrompts.push({
+                name: baseCharacter.name,
+                prompt: [baseCharacter.prompt, extraPrompt].filter(Boolean).join(', '),
+                uc: baseCharacter.uc || '',
+                enabled: true,
+                source: 'autopic-ref',
+                ref,
+            });
+            continue;
+        }
+
+        if (refKey) {
+            console.warn(`[AutoPic] Character ref not found: "${ref}". Treating it as a normal character prompt.`);
+        }
+
+        if (extraPrompt) {
+            characterPrompts.push({
+                name: ref || '',
+                prompt: extraPrompt,
+                enabled: true,
+                source: refKey ? 'unmatched-ref' : 'structured',
+                ref,
+            });
+        }
+    }
+
+    return {
+        fullTag,
+        prompt: scene,
+        editText: fullTag,
+        naiPayload: {
+            prompt: scene,
+            negative_prompt: uc,
+            characterPrompts,
+        },
+        isStructured: true,
+    };
+}
+
+function getStructuredRequestsFromText(text) {
+    return extractPicRequests(text, /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g)
+        .filter(request => request.isStructured);
+}
+
+function extractPicRequests(messageText, fallbackRegex) {
+    const text = decodeHtmlAttribute(String(messageText ?? ''));
+    const requests = [];
+    const structuredRegex = /<autopic\b([^>]*)>([\s\S]*?)<\/autopic>/gi;
+
+    for (const match of text.matchAll(structuredRegex)) {
+        const request = parseStructuredPicBlock(match[0], match[2] || '');
+        if (request.prompt || request.naiPayload.characterPrompts.length > 0) {
+            requests.push(request);
+        }
+    }
+
+    if (requests.length > 0) {
+        return requests;
+    }
+
+    return [...text.matchAll(fallbackRegex)].map(match => ({
+        fullTag: match[0],
+        prompt: decodeHtmlAttribute(match[1] || '').trim(),
+        editText: decodeHtmlAttribute(match[1] || '').trim(),
+        naiPayload: null,
+        isStructured: false,
+    }));
+}
 
 const defaultAutoPicSettings = {
     insertType: INSERT_TYPE.DISABLED,
@@ -99,18 +519,22 @@ const defaultAutoPicSettings = {
     theme: 'dark',
     promptInjection: {
         enabled: true,
-        prompt: `<image_generation>\nYou must insert a <pic prompt="example prompt"> at end of the reply. Prompts are used for stable diffusion image generation, based on the plot and character to output appropriate prompts to generate captivating images.\n</image_generation>`,
+        prompt: `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this format:\n<autopic>\n<scene>background, location, mood, composition, camera distance, lighting, non-character situation tags</scene>\n<apchar ref="registered character name">temporary expression, pose, action, outfit changes, interaction tags only</apchar>\n<apchar>full visual tags for an unregistered character</apchar>\n<uc>optional negative prompt tags only when needed</uc>\n</autopic>\nRules:\n- Write image tags in English.\n- Do not write final NovelAI character prompts yourself; AutoPic will assemble them.\n- If a character is registered in AutoPic, use <apchar ref="name"> and do not repeat their base appearance tags.\n- If a character is not registered in AutoPic, use <apchar> with their full appearance tags.\n- Put background, place, mood, composition, count tags, and shared actions in <scene>.\n- Put character-specific pose, expression, action, and temporary clothing in the matching <apchar> block.\n- Do not use Character 1: labels inside <scene>.\n</image_generation>`,
         regex: '/<pic[^>]*\\sprompt="([^"]*)"[^>]*?>/g',
         position: 'deep_system',
         depth: 0, 
     },
     promptPresets: {
-        "Default": `<image_generation>\nYou must insert a <pic prompt="example prompt"> at end of the reply. Prompts are used for stable diffusion image generation, based on the plot and character to output appropriate prompts to generate captivating images.\n</image_generation>`
+        "Default": `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this format:\n<autopic>\n<scene>background, location, mood, composition, camera distance, lighting, non-character situation tags</scene>\n<apchar ref="registered character name">temporary expression, pose, action, outfit changes, interaction tags only</apchar>\n<apchar>full visual tags for an unregistered character</apchar>\n<uc>optional negative prompt tags only when needed</uc>\n</autopic>\nRules:\n- Write image tags in English.\n- Do not write final NovelAI character prompts yourself; AutoPic will assemble them.\n- If a character is registered in AutoPic, use <apchar ref="name"> and do not repeat their base appearance tags.\n- If a character is not registered in AutoPic, use <apchar> with their full appearance tags.\n- Put background, place, mood, composition, count tags, and shared actions in <scene>.\n- Put character-specific pose, expression, action, and temporary clothing in the matching <apchar> block.\n- Do not use Character 1: labels inside <scene>.\n</image_generation>`
     },
     linkedPresets: {},
     characterPrompts: {},
     naiParams: { ...NAI_DEFAULTS },
+    manualGeneration: { ...MANUAL_DEFAULTS },
 };
+
+const STRUCTURED_BLOCKS_PROMPT_VERSION = 3;
+const STRUCTURED_BLOCKS_PROMPT = `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this exact format:\n<autopic>\n<scene>character count tags, background, location, mood, composition, camera distance, lighting, shared actions, non-character situation tags</scene>\n<apchar ref="registered character name">temporary expression, pose, action, gaze, outfit changes, interaction tags only</apchar>\n<apchar>full visual tags for an unregistered character only</apchar>\n<uc>optional negative prompt tags only when needed</uc>\n</autopic>\nRules:\n- Write image tags in English.\n- AutoPic assembles NovelAI character prompts. Do not write a final combined NovelAI prompt yourself.\n- If a character appears in <autopic_registered_characters>, you must use <apchar ref="exact name"> for that character.\n- For registered characters, never copy their base appearance tags into <scene>.\n- For registered characters, never repeat their base appearance tags inside the <apchar ref> body. Only write temporary expression, pose, action, gaze, outfit changes, and interaction tags there.\n- Put character count tags such as 1girl, 1boy, 2girls, 1girl 1boy in <scene>.\n- Put background, place, mood, composition, camera distance, lighting, and shared actions in <scene>.\n- Use plain <apchar> only for unregistered characters, and include their full visual tags there.\n- Do not use Character 1: labels.\n- Do not use the old <pic prompt="..."> format.\n</image_generation>`;
 function updateUI() {
     $('#autopic_menu_item').toggleClass(
         'selected',
@@ -137,9 +561,16 @@ function updateUI() {
         
         // NAI cfg_rescale UI 업데이트
         const nai = getNaiParams();
-        $('#nai_use_rescale').prop('checked', !!nai.useNaiRescale);
-        $('#nai_cfg_rescale').val(nai.cfg_rescale).prop('disabled', !nai.useNaiRescale);
-        $('#nai_cfg_rescale_display').text(Number(nai.cfg_rescale).toFixed(2));
+		$('#nai_use_server_plugin').prop('checked', !!nai.useServerPlugin);
+		$('#nai_plugin_options').css({ opacity: nai.useServerPlugin ? '1' : '0.4', 'pointer-events': nai.useServerPlugin ? 'auto' : 'none' });
+        $('#nai_character_positions_ai_choice').prop('checked', !!nai.useCharacterPositionsAiChoice);
+		$('#nai_cfg_rescale').val(nai.cfg_rescale);
+		$('#nai_cfg_rescale_display').text(Number(nai.cfg_rescale).toFixed(2));
+        renderManualProfileSelect();
+        const manual = getManualParams();
+        $('#autopic_manual_enabled').prop('checked', !!manual.enabled);
+        $('#autopic_manual_profile').val(manual.profileId || '');
+        $('#autopic_manual_max_tokens').val(manual.maxTokens);
         // NAI Rescale 비활성화 시 카드 흐리게
         $('#nai-params-card').css('opacity', nai.useNaiRescale && extension_settings?.sd?.source === 'novel' ? '1' : '0.5');
 
@@ -173,6 +604,16 @@ async function loadSettings() {
         if (!extension_settings[extensionName].promptPresets) {
             extension_settings[extensionName].promptPresets = JSON.parse(JSON.stringify(defaultAutoPicSettings.promptPresets));
         }
+        if (
+            !extension_settings[extensionName].promptPresets["Structured Blocks"] ||
+            extension_settings[extensionName].structuredBlocksPromptVersion !== STRUCTURED_BLOCKS_PROMPT_VERSION
+        ) {
+            extension_settings[extensionName].promptPresets["Structured Blocks"] = STRUCTURED_BLOCKS_PROMPT;
+            extension_settings[extensionName].structuredBlocksPromptVersion = STRUCTURED_BLOCKS_PROMPT_VERSION;
+        }
+        if (!extension_settings[extensionName].promptPresets["Structured Blocks"]) {
+            extension_settings[extensionName].promptPresets["Structured Blocks"] = defaultAutoPicSettings.promptInjection.prompt;
+        }
         if (!extension_settings[extensionName].linkedPresets) {
             extension_settings[extensionName].linkedPresets = {};
         }
@@ -184,11 +625,37 @@ async function loadSettings() {
                 if (extension_settings[extensionName].naiParams[k] === undefined)
                     extension_settings[extensionName].naiParams[k] = v;
             }
-            // 구버전 호환: useNaiRescale이 없던 시절 저장된 경우 기본 false
-            if (extension_settings[extensionName].naiParams.useNaiRescale === undefined) {
-                extension_settings[extensionName].naiParams.useNaiRescale = false;
+			// 구버전 호환: useNaiRescale이 없던 시절 저장된 경우 기본 false
+			if (extension_settings[extensionName].naiParams.useNaiRescale === undefined) {
+				extension_settings[extensionName].naiParams.useNaiRescale = false;
+			}
+			// 구버전 호환: useServerPlugin이 없던 시절 저장된 경우 기본 false
+			if (extension_settings[extensionName].naiParams.useServerPlugin === undefined) {
+				extension_settings[extensionName].naiParams.useServerPlugin = false;
+			}
+            if (extension_settings[extensionName].naiParams.useCharacterPositionsAiChoice === undefined) {
+                extension_settings[extensionName].naiParams.useCharacterPositionsAiChoice = true;
             }
         }
+        if (!extension_settings[extensionName].manualGeneration) {
+            extension_settings[extensionName].manualGeneration = { ...MANUAL_DEFAULTS };
+        } else {
+            for (const [k, v] of Object.entries(MANUAL_DEFAULTS)) {
+                if (extension_settings[extensionName].manualGeneration[k] === undefined) {
+                    extension_settings[extensionName].manualGeneration[k] = v;
+                }
+            }
+        }
+    }
+    if (!extension_settings[extensionName].promptPresets) {
+        extension_settings[extensionName].promptPresets = {};
+    }
+    if (
+        !extension_settings[extensionName].promptPresets["Structured Blocks"] ||
+        extension_settings[extensionName].structuredBlocksPromptVersion !== STRUCTURED_BLOCKS_PROMPT_VERSION
+    ) {
+        extension_settings[extensionName].promptPresets["Structured Blocks"] = STRUCTURED_BLOCKS_PROMPT;
+        extension_settings[extensionName].structuredBlocksPromptVersion = STRUCTURED_BLOCKS_PROMPT_VERSION;
     }
     updateUI();
 }
@@ -202,6 +669,7 @@ async function createSettings(settingsHtml) {
     }
 
     $('#autopic_settings_container').empty().append(settingsHtml);
+    localizeSettingsLabels();
 
 
     $(document).off('click', '.image-gen-nav-item').on('click', '.image-gen-nav-item', function() {
@@ -233,6 +701,20 @@ async function createSettings(settingsHtml) {
     });
     $('#prompt_injection_enabled').on('change', function () {
         extension_settings[extensionName].promptInjection.enabled = $(this).prop('checked');
+        saveSettingsDebounced();
+    });
+    $('#autopic_manual_enabled').on('change', function () {
+        getManualParams().enabled = $(this).prop('checked');
+        saveSettingsDebounced();
+        initializeAllManualButtons();
+    });
+    $('#autopic_manual_profile').on('change', function () {
+        getManualParams().profileId = String($(this).val() || '');
+        saveSettingsDebounced();
+    });
+    $('#autopic_manual_max_tokens').on('input', function () {
+        const value = Number($(this).val());
+        getManualParams().maxTokens = Number.isFinite(value) && value > 0 ? value : MANUAL_DEFAULTS.maxTokens;
         saveSettingsDebounced();
     });
 
@@ -405,20 +887,22 @@ async function createSettings(settingsHtml) {
     });
 
     // ── NAI cfg_rescale 바인딩 ────────────────────────────────
-    $('#nai_use_rescale').on('change', function() {
-        const enabled = $(this).prop('checked');
-        getNaiParams().useNaiRescale = enabled;
-        $('#nai_cfg_rescale').prop('disabled', !enabled);
-        updateUI();
-        saveSettingsDebounced();
-        if (enabled) {
-            toastr.info('NAI Rescale 활성화: AutoPic 서버 플러그인이 필요합니다.');
-        }
-    });
-    $('#nai_cfg_rescale').on('input', function() {
-        const val = parseFloat($(this).val());
-        getNaiParams().cfg_rescale = isNaN(val) ? 0 : val;
-        $('#nai_cfg_rescale_display').text(getNaiParams().cfg_rescale.toFixed(2));
+	$('#nai_use_server_plugin').on('change', function() {
+		const enabled = $(this).prop('checked');
+		getNaiParams().useServerPlugin = enabled;
+		getNaiParams().useNaiRescale = enabled ? getNaiParams().useNaiRescale : false;
+		$('#nai_plugin_options').css({ opacity: enabled ? '1' : '0.4', 'pointer-events': enabled ? 'auto' : 'none' });
+		saveSettingsDebounced();
+	});
+
+	$('#nai_cfg_rescale').on('input', function() {
+		const val = parseFloat($(this).val());
+		getNaiParams().cfg_rescale = isNaN(val) ? 0 : val;
+		$('#nai_cfg_rescale_display').text(getNaiParams().cfg_rescale.toFixed(2));
+		saveSettingsDebounced();
+	});
+    $('#nai_character_positions_ai_choice').on('change', function() {
+        getNaiParams().useCharacterPositionsAiChoice = $(this).prop('checked');
         saveSettingsDebounced();
     });
     // ─────────────────────────────────────────────────────────
@@ -521,21 +1005,35 @@ function renderCharacterPrompts() {
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                     <label class="gen-checkbox-label" style="margin:0; cursor:pointer; display:flex; align-items:center; gap:8px;">
                         <input type="checkbox" class="char-enabled-checkbox" data-index="${index}" ${isEnabled ? 'checked' : ''}>
-                        <span style="font-weight:bold; font-size:0.8rem; color:var(--ap-accent);">#${slotNum} - {autopic_char${slotNum}}</span>
+                        <span style="font-weight:bold; font-size:0.8rem; color:var(--ap-accent);">#${slotNum} - {autopic_char${slotNum}} - ${escapeHtmlAttribute(item.name || 'unnamed')}</span>
                     </label>
                     <button class="remove-char-prompt-btn gen-btn gen-btn-red" data-index="${index}" style="padding:2px 8px; font-size:0.7rem;">삭제</button>
                 </div>
                 <div style="display:flex; flex-direction:column; gap:8px;">
+                    <input class="gen-custom-input char-name-input" data-index="${index}" value="${escapeHtmlAttribute(item.name || '')}" placeholder="Reference name for &lt;apchar ref=&quot;name&quot;&gt;">
                     <textarea class="gen-custom-input char-prompt-input" data-index="${index}" rows="2" placeholder="캐릭터 외형 프롬프트" style="resize: vertical;">${item.prompt || ''}</textarea>
+                    <textarea class="gen-custom-input char-uc-input" data-index="${index}" rows="1" placeholder="캐릭터 UC (선택사항)" style="resize: vertical;">${item.uc || ''}</textarea>
                 </div>
             </div>
         `;
         $list.append(html);
     });
 
+    $('.char-name-input').off('input').on('input', function() {
+        const idx = $(this).data('index');
+        charData[idx].name = $(this).val();
+        saveSettingsDebounced();
+    });
+
     $('.char-prompt-input').off('input').on('input', function() {
         const idx = $(this).data('index');
         charData[idx].prompt = $(this).val();
+        saveSettingsDebounced();
+    });
+
+    $('.char-uc-input').off('input').on('input', function() {
+        const idx = $(this).data('index');
+        charData[idx].uc = $(this).val();
         saveSettingsDebounced();
     });
 
@@ -567,12 +1065,7 @@ $(document).off('click', '#add_char_prompt_btn').on('click', '#add_char_prompt_b
         extension_settings[extensionName].characterPrompts[avatarFile] = [];
     }
 
-    if (extension_settings[extensionName].characterPrompts[avatarFile].length >= 6) {
-        toastr.warning("최대 6명까지만 추가할 수 있습니다.");
-        return;
-    }
-
-    extension_settings[extensionName].characterPrompts[avatarFile].push({ prompt: '', enabled: true });
+    extension_settings[extensionName].characterPrompts[avatarFile].push({ name: '', prompt: '', enabled: true });
     saveSettingsDebounced();
     renderCharacterPrompts();
 });
@@ -759,6 +1252,68 @@ function updatePresetSelect(forceSelectedName = null) {
     }
 }
 
+function renderManualProfileSelect() {
+    const $select = $('#autopic_manual_profile');
+    if (!$select.length) return;
+
+    const manual = getManualParams();
+    const current = manual.profileId || '';
+    const context = getContext();
+    const manager = context?.extensionSettings?.connectionManager;
+    const profiles = Array.isArray(manager?.profiles) ? manager.profiles : [];
+
+    $select.empty();
+    $select.append('<option value="">연결 프로필 선택</option>');
+
+    for (const profile of profiles.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))) {
+        const value = escapeHtmlAttribute(profile.id || '');
+        const label = escapeHtmlAttribute(profile.name || profile.id || 'Unnamed profile');
+        $select.append(`<option value="${value}">${label}</option>`);
+    }
+
+    if (current && profiles.some(profile => profile.id === current)) {
+        $select.val(current);
+    } else {
+        $select.val('');
+    }
+}
+
+function localizeSettingsLabels() {
+    const legacyCodeStyle = 'background:var(--ap-bg-item); color:var(--ap-text); border:1px solid var(--ap-border); padding: 1px 5px; border-radius: 3px;';
+
+    $('#prompt_injection_regex')
+        .attr('placeholder', '예: /<pic[^>]*\\sprompt=([^>]*?)>/g')
+        .prev('p')
+        .html(`구버전 <code style="${legacyCodeStyle}">&lt;pic prompt="..."&gt;</code> 방식 전용입니다. <code style="${legacyCodeStyle}">&lt;autopic&gt;</code> 사용 시 무시됩니다.`);
+
+    $('#autopic_settings_container .gen-section-title').each(function () {
+        if ($(this).text().trim() === 'Manual Image Generation') {
+            $(this).text('수동 이미지 생성');
+        }
+    });
+}
+
+function buildAvailableCharacterRefsPrompt(charData) {
+    const refs = Array.isArray(charData)
+        ? charData
+            .map((item, index) => ({
+                name: String(item?.name ?? '').trim(),
+                prompt: String(item?.prompt ?? '').trim(),
+                enabled: item?.enabled !== false,
+                slot: index + 1,
+            }))
+            .filter(item => item.enabled && item.name && item.prompt)
+        : [];
+
+    if (refs.length === 0) {
+        return '';
+    }
+
+    const lines = refs.map(item => `- ${item.name}: ${item.prompt}`);
+
+    return `\n\n<autopic_registered_characters>\nAvailable registered character refs. Use these names exactly in <char ref=\"name\">. Do not copy these base appearance tags into <scene> or into the <char> body.\n${lines.join('\n')}\n</autopic_registered_characters>`;
+}
+
 function getFinalPrompt() {
     const context = getContext();
     const charId = context.characterId ?? (characters.findIndex(c => c.avatar === context.character?.avatar));
@@ -773,8 +1328,10 @@ function getFinalPrompt() {
         }
 
         const charData = extension_settings[extensionName].characterPrompts[avatarFile] || [];
+        finalPrompt += buildAvailableCharacterRefsPrompt(charData);
 
-        for (let i = 1; i <= 6; i++) {
+        const charCount = Math.max(charData.length, 1);
+        for (let i = 1; i <= charCount; i++) {
             const placeholder = `{autopic_char${i}}`;
             const item = charData[i - 1];
             let replacement = "";
@@ -786,7 +1343,7 @@ function getFinalPrompt() {
             finalPrompt = finalPrompt.split(placeholder).join(replacement);
         }
     } else {
-        for (let i = 1; i <= 6; i++) {
+        for (let i = 1; i <= 20; i++) {
             finalPrompt = finalPrompt.split(`{autopic_char${i}}`).join("");
         }
     }
@@ -1138,14 +1695,27 @@ $(function () {
             const message = context.chat[mesId];
             if (message && !message.is_user && !message.extra?.title) {
                 const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/i;
-                const imgRegex = /<img[^>]*\stitle="([^"]*)"[^>]*?>/i;
-                const match = message.mes.match(picRegex) || message.mes.match(imgRegex);
-                if (match && match[1]) {
+                const picMatch = message.mes.match(picRegex);
+                if (picMatch && picMatch[1]) {
                     if (!message.extra) message.extra = {};
-                    message.extra.title = match[1];
+                    message.extra.title = picMatch[1];
+                } else {
+                    // img 태그의 title은 내부에 따옴표가 포함될 수 있으므로 DOM 파싱 사용
+                    const imgTagMatch = message.mes.match(/<img[^>]+>/i);
+                    if (imgTagMatch) {
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = imgTagMatch[0];
+                        const imgEl = tempDiv.querySelector('img');
+                        const titleVal = imgEl ? (imgEl.getAttribute('title') || imgEl.getAttribute('alt') || '') : '';
+                        if (titleVal) {
+                            if (!message.extra) message.extra = {};
+                            message.extra.title = titleVal;
+                        }
+                    }
                 }
             }
             addRerollButtonToMessage(mesId);
+            addManualGenerateButtonToMessage(mesId);
             addMobileToggleToMessage(mesId);
             attachSwipeRerollListeners(mesId);
             setTimeout(() => attachTagControls(mesId), 150);
@@ -1164,14 +1734,16 @@ $(function () {
                 }
             }
             addRerollButtonToMessage(mesId);
+            addManualGenerateButtonToMessage(mesId);
             addMobileToggleToMessage(mesId);
             attachSwipeRerollListeners(mesId);
             setTimeout(() => attachTagControls(mesId), 150);
         });
 
         eventSource.on(event_types.CHAT_CHANGED, () => {
-			renderCharacterLinkUI();
-			renderCharacterPrompts();
+            renderCharacterLinkUI();
+            renderCharacterPrompts();
+            initializeAllManualButtons();
 		});
 
         /* -------------------------------------------------------
@@ -1236,9 +1808,9 @@ $(function () {
             const mesId = $message.attr('mesid');
             
             if (mesId !== undefined) {
-                setTimeout(() => {
-                    attachTagControls(mesId);
-                }, 150);
+                // ST 스와이프 렌더링이 끝날 때까지 충분히 기다린 후 버튼 재부착
+                setTimeout(() => attachTagControls(mesId), 300);
+                setTimeout(() => attachTagControls(mesId), 700);
             }
         });
 
@@ -1393,7 +1965,140 @@ function attachSwipeRerollListeners(mesId) {
 
     });
 }
-async function handleReroll(mesId, currentPrompt) {
+
+function stripAutopicRuntimeMarkup(text) {
+    const temp = document.createElement('div');
+    temp.innerHTML = String(text ?? '');
+    temp.querySelectorAll('img, script, style').forEach(node => node.remove());
+    return decodeHtmlAttribute(temp.textContent || temp.innerText || String(text ?? ''))
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function getManualContextText(mesId) {
+    const context = getContext();
+    const chat = context.chat || [];
+    const targetIndex = Number(mesId);
+    const start = Math.max(0, targetIndex - 4);
+    const end = Math.min(chat.length - 1, targetIndex + 1);
+    const lines = [];
+
+    for (let i = start; i <= end; i++) {
+        const message = chat[i];
+        if (!message) continue;
+        const speaker = message.is_user ? 'User' : (message.name || 'Assistant');
+        const marker = i === targetIndex ? ' [TARGET]' : '';
+        const text = stripAutopicRuntimeMarkup(message.mes);
+        if (text) {
+            lines.push(`${speaker}${marker}: ${text}`);
+        }
+    }
+
+    return lines.join('\n');
+}
+
+function buildManualAutopicPrompt(mesId) {
+    const targetMessage = getContext().chat?.[mesId];
+    const targetText = stripAutopicRuntimeMarkup(targetMessage?.mes);
+
+    return `${getFinalPrompt()}
+
+Manual AutoPic task:
+Create exactly one <autopic> structured block for an illustration of the TARGET message.
+Base the image on the chat context below, but focus on the TARGET message.
+Do not continue the roleplay. Do not explain. Output only the <autopic> block.
+
+<chat_context>
+${getManualContextText(mesId)}
+</chat_context>
+
+<target_message>
+${targetText}
+</target_message>`;
+}
+
+async function handleManualGenerate(mesId) {
+    if (!SlashCommandParser.commands['sd']) {
+        toastr.error("Stable Diffusion extension not loaded.");
+        return;
+    }
+
+    const context = getContext();
+    const numericMesId = Number(mesId);
+    const message = context.chat?.[numericMesId];
+    const manual = getManualParams();
+
+    if (!message || message.is_user) return;
+    if (!manual.profileId) {
+        toastr.warning('AutoPic 설정에서 수동 생성용 Connection Profile을 선택해 주세요.');
+        return;
+    }
+
+    try {
+        toastr.info('AutoPic 수동 생성 프롬프트 작성 중...');
+        const response = await ConnectionManagerRequestService.sendRequest(
+            manual.profileId,
+            buildManualAutopicPrompt(numericMesId),
+            Number(manual.maxTokens) || MANUAL_DEFAULTS.maxTokens,
+            { extractData: true, includePreset: true, includeInstruct: true, stream: false },
+        );
+        const generatedText = String(response?.content || '').trim();
+        const prepared = preparePromptForGeneration(generatedText);
+
+        if (!prepared.naiPayload) {
+            console.warn('[AutoPic] Manual generation did not return a structured block:', generatedText);
+            toastr.error('수동 생성 결과에서 올바른 <autopic> 블록을 찾지 못했습니다.');
+            return;
+        }
+
+        toastr.info('AutoPic 이미지 생성 중...');
+        const resultUrl = await sdCallWithRescale(
+            { quiet: 'true' },
+            prepared.prompt,
+            prepared.naiPayload,
+        );
+
+        if (typeof resultUrl !== 'string' || !resultUrl.trim() || resultUrl.startsWith('Error')) {
+            toastr.error('수동 이미지 생성에 실패했습니다.');
+            return;
+        }
+
+        if (!message.extra) message.extra = {};
+        if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
+        if (!Array.isArray(message.extra.autopic_swipe_payloads)) message.extra.autopic_swipe_payloads = [];
+
+        const storedPayload = buildStoredAutopicPayload(prepared);
+        message.extra.autopic_last_payload = storedPayload;
+
+        const currentInsertType = extension_settings[extensionName].insertType;
+        if (currentInsertType === INSERT_TYPE.REPLACE) {
+            const titleForTag = prepared.editText || prepared.prompt || '';
+            const newTag = createAutopicImageTag(resultUrl, titleForTag, 'manual');
+            message.mes = replaceFirstAutopicImageOrAppend(message.mes, newTag);
+        } else {
+            message.extra.image_swipes.push(resultUrl);
+            message.extra.autopic_swipe_payloads.push(storedPayload);
+            message.extra.image = resultUrl;
+            message.extra.title = prepared.editText;
+            message.extra.inline_image = true;
+        }
+
+        updateMessageBlock(numericMesId, message);
+        appendMediaToMessage(message, $(`.mes[mesid="${numericMesId}"]`));
+        await context.saveChat();
+        await eventSource.emit(event_types.MESSAGE_UPDATED, numericMesId);
+        await eventSource.emit(event_types.MESSAGE_RENDERED, numericMesId);
+
+        toastr.success('AutoPic 수동 이미지 생성 완료.');
+    } catch (error) {
+        console.error('[AutoPic] Manual generation failed:', error);
+        toastr.error('AutoPic 수동 생성 중 오류가 발생했습니다.');
+    }
+}
+
+async function handleReroll(mesId, currentPrompt, targetAutopicId = null) {
+    currentPrompt = decodeHtmlAttribute(String(currentPrompt ?? ''));
+    targetAutopicId = decodeHtmlAttribute(String(targetAutopicId ?? ''));
     if (!SlashCommandParser.commands['sd']) {
         toastr.error("Stable Diffusion extension not loaded.");
         return;
@@ -1407,30 +2112,90 @@ async function handleReroll(mesId, currentPrompt) {
     const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/gi;
     const imgRegex = /<img[^>]+>/gi;
     
-    let foundItems = []; 
+    let foundItems = [];
 
-    // 1. 본문 내 <pic> 태그 검색
-    let picMatches = [...message.mes.matchAll(picRegex)];
-    picMatches.forEach(m => {
-        foundItems.push({ 
-            originalTag: m[0], 
-            prompt: m[1], 
-            type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe' 
+    const clickedImageTag = getAutopicImageTagById(message.mes, targetAutopicId);
+    if (clickedImageTag) {
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = clickedImageTag;
+        const imgEl = tempDiv.querySelector('img');
+        const prompt = imgEl ? (imgEl.getAttribute('title') || imgEl.getAttribute('alt') || currentPrompt || '') : currentPrompt;
+        const prepared = preparePromptForGeneration(prompt);
+
+        foundItems.push({
+            originalTag: clickedImageTag,
+            prompt: prepared.editText || prompt,
+            _parsedNaiPayload: prepared.naiPayload,
+            _parsedPrompt: prepared.prompt,
+            type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe',
         });
-    });
+    }
 
-    // 2. 본문 내 <img> 태그 검색
-    let imgMatches = [...message.mes.matchAll(imgRegex)];
+    // 0. 본문 내 <autopic> structured 블록 직접 파싱 (최우선)
+    if (foundItems.length === 0) {
+        getStructuredRequestsFromText(stripAutopicImagesForStructuredScan(message.mes)).forEach(parsed => {
+            if (parsed.prompt || parsed.naiPayload?.characterPrompts?.length > 0) {
+                foundItems.push({
+                    originalTag: parsed.fullTag,
+                    prompt: parsed.editText,
+                    _parsedNaiPayload: parsed.naiPayload,
+                    _parsedPrompt: parsed.prompt,
+                    type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe',
+                });
+            }
+        });
+    }
+
+    if (foundItems.length === 0 && currentPrompt) {
+        getStructuredRequestsFromText(currentPrompt).forEach(parsed => {
+            if (parsed.prompt || parsed.naiPayload?.characterPrompts?.length > 0) {
+                foundItems.push({
+                    originalTag: null,
+                    prompt: parsed.editText,
+                    _parsedNaiPayload: parsed.naiPayload,
+                    _parsedPrompt: parsed.prompt,
+                    type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe',
+                });
+            }
+        });
+    }
+
+    // 1. 본문 내 <pic> 태그 검색 (레거시)
+    if (foundItems.length === 0) {
+        let picMatches = [...message.mes.matchAll(picRegex)];
+        picMatches.forEach(m => {
+            foundItems.push({ 
+                originalTag: m[0], 
+                prompt: m[1], 
+                _parsedNaiPayload: null,
+                _parsedPrompt: m[1],
+                type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe' 
+            });
+        });
+    }
+
+    // 2. 본문 내 <img> 태그 검색 (이미 치환된 경우)
+    let imgMatches = foundItems.length === 0 ? [...message.mes.matchAll(imgRegex)] : [];
     imgMatches.forEach(m => {
         const fullTag = m[0];
-        const titleMatch = fullTag.match(/title="([^"]*)"/i);
-        const prompt = titleMatch ? titleMatch[1] : "";
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = fullTag;
+        const imgEl = tempDiv.querySelector('img');
+        const prompt = imgEl ? (imgEl.getAttribute('title') || imgEl.getAttribute('alt') || '') : '';
         
         if (prompt) {
             if (!foundItems.some(item => item.originalTag === fullTag)) {
+                // img[title]에 저장된 editText로 재파싱 시도
+                const reparseResult = (() => {
+                    const structReq = getStructuredRequestsFromText(prompt);
+                    if (structReq.length > 0) return { naiPayload: structReq[0].naiPayload, prompt: structReq[0].prompt };
+                    return { naiPayload: null, prompt };
+                })();
                 foundItems.push({ 
                     originalTag: fullTag, 
-                    prompt: prompt, 
+                    prompt: prompt,
+                    _parsedNaiPayload: reparseResult.naiPayload,
+                    _parsedPrompt: reparseResult.prompt,
                     type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe' 
                 });
             }
@@ -1439,19 +2204,57 @@ async function handleReroll(mesId, currentPrompt) {
 
     // 3. 메시지 extra 데이터 (이미 생성된 갤러리 이미지들)
     if (message.extra && message.extra.image_swipes && message.extra.image_swipes.length > 0) {
+        const structuredSource = foundItems.find(i => i._parsedNaiPayload);
         message.extra.image_swipes.forEach((src, sIdx) => {
-            foundItems.push({ 
-                swipeIdx: sIdx, 
-                prompt: message.extra.title || currentPrompt || "", 
-                type: 'swipe' 
+            const savedPayload = Array.isArray(message.extra.autopic_swipe_payloads)
+                ? message.extra.autopic_swipe_payloads[sIdx]
+                : null;
+
+            let resolvedNaiPayload = structuredSource?._parsedNaiPayload || null;
+            let resolvedPrompt = structuredSource?._parsedPrompt || message.extra.title || currentPrompt || "";
+            let resolvedEditText = structuredSource?.prompt || message.extra.title || currentPrompt || "";
+
+            if (!resolvedNaiPayload && savedPayload?.rawAutopicTag) {
+                // rawAutopicTag를 현재 캐릭터 등록 정보로 새로 파싱 (태그 변경 반영)
+                const reparsed = parseStructuredPicBlock(savedPayload.rawAutopicTag, savedPayload.rawAutopicTag.replace(/^<autopic[^>]*>|<\/autopic>$/gi, ''));
+                resolvedNaiPayload = reparsed.naiPayload;
+                resolvedPrompt = reparsed.prompt;
+                resolvedEditText = savedPayload.editText || savedPayload.rawAutopicTag;
+            }
+
+            if (!resolvedNaiPayload && savedPayload?.editText) {
+                const reparsed = preparePromptForGeneration(savedPayload.editText);
+                if (reparsed.naiPayload) {
+                    resolvedNaiPayload = reparsed.naiPayload;
+                    resolvedPrompt = reparsed.prompt;
+                    resolvedEditText = reparsed.editText;
+                }
+            }
+
+            if (!resolvedNaiPayload && savedPayload?.naiPayload) {
+                resolvedNaiPayload = savedPayload.naiPayload;
+                resolvedPrompt = savedPayload.naiPayload.prompt || resolvedPrompt;
+                resolvedEditText = savedPayload.editText || resolvedEditText;
+            }
+
+            foundItems.push({
+                swipeIdx: sIdx,
+                prompt: resolvedEditText,
+                _parsedNaiPayload: resolvedNaiPayload,
+                _parsedPrompt: resolvedPrompt,
+                _savedPayload: savedPayload,
+                type: 'swipe',
             });
         });
     }
 
+
     if (foundItems.length === 0) {
         foundItems.push({ 
             originalTag: null, 
-            prompt: currentPrompt || "", 
+            prompt: currentPrompt || "",
+            _parsedNaiPayload: null,
+            _parsedPrompt: currentPrompt || "",
             type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe' 
         });
     }
@@ -1496,24 +2299,52 @@ async function handleReroll(mesId, currentPrompt) {
 
     if (result) {
         const finalPrompt = editedPrompts[selectedIdx];
-        const targetItem = foundItems[selectedIdx];
+		const targetItem = foundItems[selectedIdx];
+		const reparsedFinalPrompt = resolveRerollGenerationPrompt(finalPrompt, targetItem, message, currentPrompt);
+		// message.mes에서 직접 파싱한 naiPayload가 있으면 재파싱 없이 사용
+		let generationPrompt = reparsedFinalPrompt.naiPayload
+			? reparsedFinalPrompt
+			: targetItem._parsedNaiPayload
+			? {
+				prompt: targetItem._parsedPrompt || finalPrompt,
+				naiPayload: targetItem._parsedNaiPayload,
+				editText: finalPrompt,
+			}
+			: reparsedFinalPrompt;
 
-        if (finalPrompt && finalPrompt.trim()) {
+		if (!generationPrompt.naiPayload && /<autopic\b/i.test(decodeHtmlAttribute(generationPrompt.prompt))) {
+			const repairedPrompt = preparePromptForGeneration(generationPrompt.prompt);
+			if (repairedPrompt.naiPayload) {
+				generationPrompt = repairedPrompt;
+			} else {
+				console.warn('[AutoPic] Reroll found an <autopic> block but could not parse it:', generationPrompt.prompt);
+			}
+		}
+
+		if (generationPrompt.prompt || generationPrompt.naiPayload?.characterPrompts?.length) {
+
             try {
                 toastr.info("이미지 생성 중...");
-                const resultUrl = await sdCallWithRescale({ quiet: 'true' }, finalPrompt.trim());
+                const resultUrl = await sdCallWithRescale(
+                    { quiet: 'true' },
+                    generationPrompt.prompt,
+                    generationPrompt.naiPayload,
+                );
                 
                 if (typeof resultUrl === 'string' && !resultUrl.startsWith('Error')) {
                     const currentInsertType = extension_settings[extensionName].insertType;
 
-                    // [핵심 수정] 태그 치환 모드일 때만 본문(message.mes)을 수정함
-                    if (currentInsertType === INSERT_TYPE.REPLACE && targetItem.originalTag) {
-                        const idMatch = targetItem.originalTag.match(/data-autopic-id="([^"]*)"/);
-                        const idAttr = idMatch ? ` data-autopic-id="${idMatch[1]}"` : ` data-autopic-id="tag-${Date.now()}"`;
-                        const newTag = `<img src="${escapeHtmlAttribute(resultUrl)}"${idAttr} title="${escapeHtmlAttribute(finalPrompt.trim())}" alt="${escapeHtmlAttribute(finalPrompt.trim())}">`;
-                        message.mes = message.mes.replace(targetItem.originalTag, newTag);
+
+                    if (currentInsertType === INSERT_TYPE.REPLACE) {
+                        // 다음 재생성에서도 구조 전체를 복원할 수 있도록
+                        // editText(<pic>...</pic> 원본)를 title에 보존한다
+                        const titleForTag = generationPrompt.editText || generationPrompt.prompt || '';
+                        const newTag = createAutopicImageTag(resultUrl, titleForTag, 'tag');
+                        message.mes = targetItem.originalTag
+                            ? replaceOrAppendAutopicTag(message.mes, targetItem.originalTag, newTag)
+                            : replaceFirstAutopicImageOrAppend(message.mes, newTag);
                     } 
-                    // [핵심 수정] 그 외(INLINE 등) 모드에서는 본문은 절대 건드리지 않고 갤러리(extra)만 수정
+
                     else {
                         if (!message.extra) message.extra = {};
                         if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
@@ -1523,13 +2354,23 @@ async function handleReroll(mesId, currentPrompt) {
                         } else {
                             message.extra.image_swipes.push(resultUrl);
                         }
+                        if (!Array.isArray(message.extra.autopic_swipe_payloads)) message.extra.autopic_swipe_payloads = [];
+                        const storedPayload = buildStoredAutopicPayload(generationPrompt);
+                        if (targetItem.swipeIdx !== undefined) {
+                            message.extra.autopic_swipe_payloads[targetItem.swipeIdx] = storedPayload;
+                        } else {
+                            message.extra.autopic_swipe_payloads.push(storedPayload);
+                        }
+                        message.extra.autopic_last_payload = storedPayload;
                         message.extra.image = resultUrl;
-                        message.extra.title = finalPrompt.trim();
+                        message.extra.title = generationPrompt.editText;
                         message.extra.inline_image = true;
                     }
 
                     updateMessageBlock(mesId, message);
-                    appendMediaToMessage(message, $(`.mes[mesid="${mesId}"]`));
+                    if (currentInsertType !== INSERT_TYPE.REPLACE) {
+                        appendMediaToMessage(message, $(`.mes[mesid="${mesId}"]`));
+                    }
                     await context.saveChat();
                     
                     await eventSource.emit(event_types.MESSAGE_UPDATED, mesId);
@@ -1553,8 +2394,86 @@ async function handleReroll(mesId, currentPrompt) {
  * /api/novelai/generate-image 요청을 가로채서 자동으로 주입하므로
  * 여기서는 별도 처리가 필요 없다.
  */
-async function sdCallWithRescale(args, prompt) {
-    return await SlashCommandParser.commands['sd'].callback(args, prompt);
+async function sdCallWithRescale(args, prompt, naiPayload = null) {
+    const previousPendingNaiPayload = pendingNaiPayload;
+    pendingNaiPayload = naiPayload;
+
+    try {
+        return await SlashCommandParser.commands['sd'].callback(args, prompt);
+    } finally {
+        pendingNaiPayload = previousPendingNaiPayload;
+    }
+}
+
+function preparePromptForGeneration(promptText) {
+    const text = decodeHtmlAttribute(String(promptText ?? '')).trim();
+    const structuredRequests = getStructuredRequestsFromText(text);
+
+    if (structuredRequests.length > 0) {
+        const request = structuredRequests[0];
+        return {
+            prompt: request.prompt,
+            naiPayload: request.naiPayload,
+            editText: request.editText,
+        };
+    }
+
+    return {
+        prompt: text,
+        naiPayload: null,
+        editText: text,
+    };
+}
+
+function resolveRerollGenerationPrompt(finalPrompt, targetItem, message, currentPrompt) {
+    const candidates = [
+        finalPrompt,
+        targetItem?.prompt,
+        targetItem?._savedPayload?.rawAutopicTag,
+        targetItem?._savedPayload?.editText,
+        message?.extra?.autopic_last_payload?.rawAutopicTag,
+        message?.extra?.autopic_last_payload?.editText,
+        message?.extra?.title,
+        currentPrompt,
+        message?.mes,
+    ];
+
+    for (const candidate of candidates) {
+        const prepared = preparePromptForGeneration(candidate);
+        if (prepared.naiPayload) {
+            return prepared;
+        }
+    }
+
+    if (targetItem?._parsedNaiPayload) {
+        return {
+            prompt: targetItem._parsedPrompt || finalPrompt,
+            naiPayload: targetItem._parsedNaiPayload,
+            editText: finalPrompt,
+        };
+    }
+
+    if (targetItem?._savedPayload?.naiPayload) {
+        return {
+            prompt: targetItem._savedPayload.naiPayload.prompt || finalPrompt,
+            naiPayload: targetItem._savedPayload.naiPayload,
+            editText: targetItem._savedPayload.editText || finalPrompt,
+        };
+    }
+
+    return preparePromptForGeneration(finalPrompt);
+}
+
+function buildStoredAutopicPayload(generationPrompt) {
+    const editText = generationPrompt?.editText || generationPrompt?.prompt || '';
+    const structuredRequests = getStructuredRequestsFromText(editText);
+    const rawAutopicTag = structuredRequests.length > 0 ? structuredRequests[0].fullTag : null;
+
+    return {
+        editText,
+        rawAutopicTag,
+        naiPayload: generationPrompt?.naiPayload || structuredRequests[0]?.naiPayload || null,
+    };
 }
 
 function applyTheme(theme) {
@@ -1579,8 +2498,8 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
         regex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
     }
 
-    const matches = [...message.mes.matchAll(regex)];
-    if (matches.length === 0) return;
+    const picRequests = extractPicRequests(message.mes, regex);
+    if (picRequests.length === 0) return;
 
     setTimeout(async () => {
         try {
@@ -1588,7 +2507,7 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
             if (currentIdx === -1) return; 
 
             const insertType = extension_settings[extensionName].insertType;
-            const total = matches.length;
+            const total = picRequests.length;
             
             toastr.info(`${total}개의 이미지 생성을 시작합니다...`, "AutoPic", { "progressBar": true });
             
@@ -1601,39 +2520,51 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
             let lastPromptUsed = "";
             let updatedMes = message.mes;
 
-            for (let i = 0; i < matches.length; i++) {
+            for (let i = 0; i < picRequests.length; i++) {
                 toastr.info(`이미지 생성 중... (${i + 1} / ${total})`, "AutoPic", { "timeOut": 2000 });
 
-                const match = matches[i];
-                const fullTag = match[0];
-                const prompt = match[1] || '';
+                const request = picRequests[i];
+                const fullTag = request.fullTag;
+                const prompt = request.prompt || '';
+                const editText = request.editText || prompt;
                 
-                if (!prompt.trim()) continue;
+                if (!prompt.trim() && !request.naiPayload?.characterPrompts?.length) continue;
 
-                const result = await sdCallWithRescale({ quiet: 'true' }, prompt.trim());
+                const result = await sdCallWithRescale({ quiet: 'true' }, prompt.trim(), request.naiPayload);
                 
                 if (typeof result === 'string' && result.trim().length > 0 && !result.startsWith('Error')) {
                     hasChanged = true;
                     lastImageResult = result;
-                    lastPromptUsed = prompt.trim();
+                    lastPromptUsed = editText.trim();
                     
-                    if (insertType === INSERT_TYPE.INLINE) {
-                        message.extra.image_swipes.push(result);
-                    } 
-                    else if (insertType === INSERT_TYPE.REPLACE) {
-                        const tagId = `tag-${Date.now()}-${i}`; 
-                        const newTag = `<img src="${escapeHtmlAttribute(result)}" data-autopic-id="${tagId}" title="${escapeHtmlAttribute(prompt)}" alt="${escapeHtmlAttribute(prompt)}">`;
-                        updatedMes = updatedMes.replace(fullTag, () => newTag);
-                    }
+				if (insertType === INSERT_TYPE.INLINE) {
+					message.extra.image_swipes.push(result);
+					if (!Array.isArray(message.extra.autopic_swipe_payloads)) message.extra.autopic_swipe_payloads = [];
+					message.extra.autopic_swipe_payloads.push(buildStoredAutopicPayload({
+						editText,
+						prompt,
+						naiPayload: request.naiPayload,
+					}));
+					updatedMes = replaceOrAppendAutopicTag(updatedMes, fullTag, '').trim();
+				}
+				else if (insertType === INSERT_TYPE.REPLACE) {
+					const newTag = createAutopicImageTag(result, editText, `tag-${i}`);
+					updatedMes = replaceOrAppendAutopicTag(updatedMes, fullTag, newTag);
+				}
                 } else {
                     toastr.error(`${i + 1}번째 이미지 생성에 실패했습니다.`);
                 }
             }
 
             if (hasChanged) {
-                message.extra.title = lastPromptUsed;
+				message.extra.title = lastPromptUsed;
+				if (Array.isArray(message.extra.autopic_swipe_payloads) && message.extra.autopic_swipe_payloads.length > 0) {
+					const last = message.extra.autopic_swipe_payloads[message.extra.autopic_swipe_payloads.length - 1];
+					message.extra.autopic_last_payload = last;
+				}
 
                 if (insertType === INSERT_TYPE.INLINE) {
+                    message.mes = updatedMes;
                     message.extra.image = lastImageResult; 
                     message.extra.inline_image = true;
                     appendMediaToMessage(message, messageElement);
@@ -1684,20 +2615,16 @@ async function attachTagControls(mesId) {
             if (!hasAutopicId) {
                 $img.attr('data-autopic-id', `tag-recovered-${Date.now()}`);
             }
+            const autopicId = $img.attr('data-autopic-id') || "";
 
             $img.wrap('<div class="autopic-tag-img-wrapper"></div>');
             
-            const $controls = $(`
-                <div class="autopic-tag-controls">
-                    <div class="autopic-control-btn reroll-trigger fa-solid fa-rotate interactable" 
-                         data-mesid="${mesId}" 
-                         data-prompt="${escapeHtmlAttribute(title)}" 
-                         title="Generate Another Image"
-                         role="button" 
-                         tabindex="0">
-                    </div>
-                </div>
-            `);
+            const $controls = $('<div class="autopic-tag-controls"></div>');
+            const $btn = $('<div class="autopic-control-btn reroll-trigger fa-solid fa-rotate interactable" title="Generate Another Image" role="button" tabindex="0"></div>');
+            $btn.attr('data-mesid', mesId);
+            $btn.attr('data-prompt', title);
+            $btn.attr('data-autopic-id', autopicId);
+            $controls.append($btn);
             $img.after($controls);
         }
     });
@@ -1719,18 +2646,21 @@ const initializeAllTagControls = () => {
 
 eventSource.on(event_types.CHAT_COMPLETED, () => {
     initializeAllTagControls();
+    initializeAllManualButtons();
 });
 
 eventSource.on(event_types.CHARACTER_SELECTED, () => {
     renderCharacterLinkUI();
     renderCharacterPrompts();
     initializeAllTagControls();
+    initializeAllManualButtons();
 });
 
 eventSource.on(event_types.CHAT_CHANGED, () => {
     renderCharacterLinkUI();
     renderCharacterPrompts();
     initializeAllTagControls();
+    initializeAllManualButtons();
 });
 
 $(document).off('click', '.reroll-trigger').on('click', '.reroll-trigger', function(e) {
@@ -1738,5 +2668,6 @@ $(document).off('click', '.reroll-trigger').on('click', '.reroll-trigger', funct
     e.stopPropagation();
     const mesId = $(this).data('mesid');
     const prompt = $(this).data('prompt');
-    handleReroll(mesId, prompt);
+    const autopicId = $(this).attr('data-autopic-id');
+    handleReroll(mesId, prompt, autopicId);
 });
