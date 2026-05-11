@@ -533,8 +533,14 @@ const defaultAutoPicSettings = {
     manualGeneration: { ...MANUAL_DEFAULTS },
 };
 
-const STRUCTURED_BLOCKS_PROMPT_VERSION = 3;
-const STRUCTURED_BLOCKS_PROMPT = `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this exact format:\n<autopic>\n<scene>character count tags, background, location, mood, composition, camera distance, lighting, shared actions, non-character situation tags</scene>\n<apchar ref="registered character name">temporary expression, pose, action, gaze, outfit changes, interaction tags only</apchar>\n<apchar>full visual tags for an unregistered character only</apchar>\n<uc>optional negative prompt tags only when needed</uc>\n</autopic>\nRules:\n- Write image tags in English.\n- AutoPic assembles NovelAI character prompts. Do not write a final combined NovelAI prompt yourself.\n- If a character appears in <autopic_registered_characters>, you must use <apchar ref="exact name"> for that character.\n- For registered characters, never copy their base appearance tags into <scene>.\n- For registered characters, never repeat their base appearance tags inside the <apchar ref> body. Only write temporary expression, pose, action, gaze, outfit changes, and interaction tags there.\n- Put character count tags such as 1girl, 1boy, 2girls, 1girl 1boy in <scene>.\n- Put background, place, mood, composition, camera distance, lighting, and shared actions in <scene>.\n- Use plain <apchar> only for unregistered characters, and include their full visual tags there.\n- Do not use Character 1: labels.\n- Do not use the old <pic prompt="..."> format.\n</image_generation>`;
+const STRUCTURED_BLOCKS_PROMPT_VERSION = 4;
+const STRUCTURED_BLOCKS_PROMPT = `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this exact format:\n<autopic>\n<scene>danbooru tags for character counts, background, location, mood, composition, camera distance, lighting, shared actions, and non-character situation only</scene>\n<apchar ref="exact registered ref name">danbooru tags for this registered character's temporary expression, pose, gaze, action, interaction, and outfit changes only</apchar>\n<apchar>danbooru tags for one unregistered character's full visual appearance, clothing, expression, pose, gaze, action, and interaction</apchar>\n<uc>optional negative danbooru tags only when needed</uc>\n</autopic>\nRef rules:\n- <autopic_registered_characters> is the complete allow-list for ref names.\n- Use <apchar ref="exact name"> only when that exact name appears in <autopic_registered_characters>.\n- Copy ref names exactly. Do not translate, rename, shorten, complete, or guess them.\n- Do not use {{char}}, {{user}}, chat names, aliases, nicknames, relationship names, or inferred names as ref unless that exact string appears in <autopic_registered_characters>.\n- If a character is not listed, never use ref for that character. Use plain <apchar> and include full visual appearance tags.\nTag rules:\n- Write concise English NovelAI/danbooru-style tags, separated by commas.\n- AutoPic assembles NovelAI character prompts. Do not write a final combined NovelAI prompt yourself.\n- For registered characters, do not describe base appearance; AutoPic adds it automatically.\n- For registered characters, write only temporary expression, pose, gaze, action, interaction, and outfit changes inside <apchar ref>.\n- Put count tags such as 1girl, 1boy, 2girls, 1girl 1boy in <scene>.\n- Put background, place, mood, composition, camera distance, lighting, and shared actions in <scene>.\n- Do not use Character 1: labels.\n- Do not use the old <pic prompt="..."> format.\n</image_generation>`;
+const STRICT_TAG_BLOCKS_PROMPT = `<image_generation>\nOutput exactly one block when an image is needed:\n<autopic>\n<scene>1girl/1boy/count tags, background, location, composition, camera distance, lighting, shared actions</scene>\n<apchar ref="name from the valid ref list">ONLY temporary tags: expression, pose, gaze, action, interaction, temporary outfit changes. NO hair, eyes, body, skin, species, age, or permanent clothing.</apchar>\n<apchar>FULL character tags for an unregistered character: gender/count, hair, eyes, body, skin, species, age impression, clothing, expression, pose, gaze, action, interaction.</apchar>\n<uc>negative tags if needed</uc>\n</autopic>\n\nValid ref list rule:\n- The only valid ref names are inside <autopic_registered_characters>.\n- Use <apchar ref=\"exact name\"> only for a name copied exactly from that list.\n- Never use {{char}}, {{user}}, chat names, aliases, nicknames, or guessed names as ref unless the exact string is in the list.\n\nImportant difference:\n- Registered/listed character = <apchar ref=\"name\">temporary tags only; AutoPic adds base appearance.</apchar>\n- Unregistered/not listed character = <apchar>full appearance tags; do not use ref.</apchar>\n\nBad:\n<apchar ref=\"Alice\">1girl, blonde hair, green eyes, school uniform, smiling</apchar>\nGood if Alice is listed:\n<apchar ref=\"Alice\">smiling, looking at viewer, standing, holding cup</apchar>\nGood if Alice is not listed:\n<apchar>1girl, blonde hair, green eyes, school uniform, smiling, looking at viewer, standing, holding cup</apchar>\n\nUse comma-separated English NovelAI/danbooru tags only. Do not use Character 1 labels or <pic prompt=\"...\">.\n</image_generation>`;
+
+defaultAutoPicSettings.promptInjection.prompt = STRUCTURED_BLOCKS_PROMPT;
+defaultAutoPicSettings.promptPresets.Default = STRUCTURED_BLOCKS_PROMPT;
+defaultAutoPicSettings.promptPresets["Structured Blocks"] = STRUCTURED_BLOCKS_PROMPT;
+defaultAutoPicSettings.promptPresets["Strict Tag Blocks"] = STRICT_TAG_BLOCKS_PROMPT;
 function updateUI() {
     $('#autopic_menu_item').toggleClass(
         'selected',
@@ -608,11 +614,20 @@ async function loadSettings() {
             !extension_settings[extensionName].promptPresets["Structured Blocks"] ||
             extension_settings[extensionName].structuredBlocksPromptVersion !== STRUCTURED_BLOCKS_PROMPT_VERSION
         ) {
+            const previousStructuredBlocksPrompt = extension_settings[extensionName].promptPresets["Structured Blocks"];
+            const activePromptUsesStructuredBlocks =
+                extension_settings[extensionName].promptInjection?.prompt === previousStructuredBlocksPrompt;
             extension_settings[extensionName].promptPresets["Structured Blocks"] = STRUCTURED_BLOCKS_PROMPT;
             extension_settings[extensionName].structuredBlocksPromptVersion = STRUCTURED_BLOCKS_PROMPT_VERSION;
+            if (activePromptUsesStructuredBlocks) {
+                extension_settings[extensionName].promptInjection.prompt = STRUCTURED_BLOCKS_PROMPT;
+            }
         }
         if (!extension_settings[extensionName].promptPresets["Structured Blocks"]) {
             extension_settings[extensionName].promptPresets["Structured Blocks"] = defaultAutoPicSettings.promptInjection.prompt;
+        }
+        if (!extension_settings[extensionName].promptPresets["Strict Tag Blocks"]) {
+            extension_settings[extensionName].promptPresets["Strict Tag Blocks"] = STRICT_TAG_BLOCKS_PROMPT;
         }
         if (!extension_settings[extensionName].linkedPresets) {
             extension_settings[extensionName].linkedPresets = {};
@@ -654,8 +669,17 @@ async function loadSettings() {
         !extension_settings[extensionName].promptPresets["Structured Blocks"] ||
         extension_settings[extensionName].structuredBlocksPromptVersion !== STRUCTURED_BLOCKS_PROMPT_VERSION
     ) {
+        const previousStructuredBlocksPrompt = extension_settings[extensionName].promptPresets["Structured Blocks"];
+        const activePromptUsesStructuredBlocks =
+            extension_settings[extensionName].promptInjection?.prompt === previousStructuredBlocksPrompt;
         extension_settings[extensionName].promptPresets["Structured Blocks"] = STRUCTURED_BLOCKS_PROMPT;
         extension_settings[extensionName].structuredBlocksPromptVersion = STRUCTURED_BLOCKS_PROMPT_VERSION;
+        if (activePromptUsesStructuredBlocks) {
+            extension_settings[extensionName].promptInjection.prompt = STRUCTURED_BLOCKS_PROMPT;
+        }
+    }
+    if (!extension_settings[extensionName].promptPresets["Strict Tag Blocks"]) {
+        extension_settings[extensionName].promptPresets["Strict Tag Blocks"] = STRICT_TAG_BLOCKS_PROMPT;
     }
     updateUI();
 }
@@ -1309,9 +1333,9 @@ function buildAvailableCharacterRefsPrompt(charData) {
         return '';
     }
 
-    const lines = refs.map(item => `- ${item.name}: ${item.prompt}`);
+    const lines = refs.map(item => `- ${item.name}`);
 
-    return `\n\n<autopic_registered_characters>\nAvailable registered character refs. Use these names exactly in <char ref=\"name\">. Do not copy these base appearance tags into <scene> or into the <char> body.\n${lines.join('\n')}\n</autopic_registered_characters>`;
+    return `\n\n<autopic_registered_characters>\nThese are the only valid ref names for <apchar ref=\"...\">. Use a ref only when the exact name is listed here. If no exact name matches, use plain <apchar> with full visual tags instead.\n${lines.join('\n')}\n</autopic_registered_characters>`;
 }
 
 function getFinalPrompt() {
