@@ -36,6 +36,7 @@ function getCurrentAutopicCharacterPromptsForNai() {
             .map((item, index) => ({
                 name: String(item?.name ?? '').trim(),
                 prompt: String(item?.prompt ?? '').trim(),
+                clothing: String(item?.clothing ?? '').trim(),
                 uc: String(item?.uc ?? '').trim(),
                 enabled: item?.enabled !== false,
                 source: 'autopic',
@@ -348,6 +349,24 @@ function getAutopicImageTagById(messageText, autopicId) {
     return null;
 }
 
+function getAutopicImageTagBySrc(messageText, src) {
+    const targetSrc = String(src ?? '');
+    if (!targetSrc) return null;
+
+    const text = String(messageText ?? '');
+    const tempDiv = document.createElement('div');
+
+    for (const match of text.matchAll(/<img\b[^>]*>/gi)) {
+        tempDiv.innerHTML = match[0];
+        const img = tempDiv.querySelector('img');
+        if (img?.getAttribute('src') === targetSrc) {
+            return match[0];
+        }
+    }
+
+    return null;
+}
+
 function getAutopicImageRangeById(messageText, autopicId) {
     const id = String(autopicId ?? '');
     if (!id) return null;
@@ -412,6 +431,48 @@ function replaceOrAppendAutopicTag(messageText, fullTag, replacement) {
     const escapedPicRegex = /&lt;pic[\s\S]*?&gt;/i;
     if (escapedPicRegex.test(text)) {
         return text.replace(escapedPicRegex, value);
+    }
+
+    return value ? `${text}${text ? '<br>' : ''}${value}` : text;
+}
+
+function replaceExactAutopicTargetOrAppend(messageText, fullTag, replacement) {
+    const text = String(messageText ?? '');
+    const value = String(replacement ?? '');
+    const rawTag = String(fullTag ?? '');
+    const escapedTag = rawTag ? escapeHtmlAttribute(rawTag) : '';
+    const idMatch = rawTag.match(/data-autopic-id=["']([^"']*)["']/i);
+
+    if (idMatch?.[1]) {
+        const range = getAutopicImageRangeById(text, idMatch[1]);
+        if (range) {
+            return text.slice(0, range.start) + value + text.slice(range.end);
+        }
+    }
+
+    if (rawTag && text.includes(rawTag)) {
+        const start = text.indexOf(rawTag);
+        const end = start + rawTag.length;
+        let removeEnd = end;
+        const afterRawTag = text.slice(end);
+        const pairedImageMatch = afterRawTag.match(/^((?:\s|<br\s*\/?>|&nbsp;)*)<img\b[^>]*data-autopic-id=["'][^"']*["'][^>]*(?:"?>|&quot;&gt;)/i);
+
+        if (pairedImageMatch) {
+            const tempDiv = document.createElement('div');
+            const imageTagMatch = pairedImageMatch[0].match(/<img\b[\s\S]*?(?:"?>|&quot;&gt;)/i);
+            tempDiv.innerHTML = imageTagMatch?.[0] || '';
+            const img = tempDiv.querySelector('img');
+            const pairedPrompt = img ? decodeHtmlAttribute(img.getAttribute('title') || img.getAttribute('alt') || '') : '';
+            if (pairedPrompt.trim() === decodeHtmlAttribute(rawTag).trim()) {
+                removeEnd = end + pairedImageMatch[0].length;
+            }
+        }
+
+        return text.slice(0, start) + value + text.slice(removeEnd);
+    }
+
+    if (escapedTag && text.includes(escapedTag)) {
+        return text.replace(escapedTag, value);
     }
 
     return value ? `${text}${text ? '<br>' : ''}${value}` : text;
@@ -519,13 +580,13 @@ const defaultAutoPicSettings = {
     theme: 'dark',
     promptInjection: {
         enabled: true,
-        prompt: `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this format:\n<autopic>\n<scene>background, location, mood, composition, camera distance, lighting, non-character situation tags</scene>\n<apchar ref="registered character name">temporary expression, pose, action, outfit changes, interaction tags only</apchar>\n<apchar>full visual tags for an unregistered character</apchar>\n<uc>optional negative prompt tags only when needed</uc>\n</autopic>\nRules:\n- Write image tags in English.\n- Do not write final NovelAI character prompts yourself; AutoPic will assemble them.\n- If a character is registered in AutoPic, use <apchar ref="name"> and do not repeat their base appearance tags.\n- If a character is not registered in AutoPic, use <apchar> with their full appearance tags.\n- Put background, place, mood, composition, count tags, and shared actions in <scene>.\n- Put character-specific pose, expression, action, and temporary clothing in the matching <apchar> block.\n- Do not use Character 1: labels inside <scene>.\n</image_generation>`,
+        prompt: `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this format:\n<autopic>\n<scene>background, location, mood, composition, camera distance, lighting, non-character situation tags</scene>\n<apchar ref="registered character name">temporary expression, pose, action, contextually adapted outfit, interaction tags only</apchar>\n<apchar>full visual tags for an unregistered character</apchar>\n<uc>optional negative prompt tags only when needed</uc>\n</autopic>\nRules:\n- Write image tags in English.\n- Do not write final NovelAI character prompts yourself; AutoPic will assemble them.\n- If a character is registered in AutoPic, use <apchar ref="name"> and do not repeat their base appearance tags.\n- If a character is not registered in AutoPic, use <apchar> with their full appearance tags.\n- Put background, place, mood, composition, count tags, and shared actions in <scene>.\n- Put character-specific pose, expression, action, and contextually adapted clothing in the matching <apchar> block.\n- If a registered character has an <apchar_outfit> field, treat it as their default clothing reference. Adapt it freely to the scene; do not copy it verbatim.\n- Do not use Character 1: labels inside <scene>.\n</image_generation>`,
         regex: '/<pic[^>]*\\sprompt="([^"]*)"[^>]*?>/g',
         position: 'deep_system',
         depth: 0, 
     },
     promptPresets: {
-        "Default": `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this format:\n<autopic>\n<scene>background, location, mood, composition, camera distance, lighting, non-character situation tags</scene>\n<apchar ref="registered character name">temporary expression, pose, action, outfit changes, interaction tags only</apchar>\n<apchar>full visual tags for an unregistered character</apchar>\n<uc>optional negative prompt tags only when needed</uc>\n</autopic>\nRules:\n- Write image tags in English.\n- Do not write final NovelAI character prompts yourself; AutoPic will assemble them.\n- If a character is registered in AutoPic, use <apchar ref="name"> and do not repeat their base appearance tags.\n- If a character is not registered in AutoPic, use <apchar> with their full appearance tags.\n- Put background, place, mood, composition, count tags, and shared actions in <scene>.\n- Put character-specific pose, expression, action, and temporary clothing in the matching <apchar> block.\n- Do not use Character 1: labels inside <scene>.\n</image_generation>`
+        "Default": `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this format:\n<autopic>\n<scene>background, location, mood, composition, camera distance, lighting, non-character situation tags</scene>\n<apchar ref="registered character name">temporary expression, pose, action, contextually adapted outfit, interaction tags only</apchar>\n<apchar>full visual tags for an unregistered character</apchar>\n<uc>optional negative prompt tags only when needed</uc>\n</autopic>\nRules:\n- Write image tags in English.\n- Do not write final NovelAI character prompts yourself; AutoPic will assemble them.\n- If a character is registered in AutoPic, use <apchar ref="name"> and do not repeat their base appearance tags.\n- If a character is not registered in AutoPic, use <apchar> with their full appearance tags.\n- Put background, place, mood, composition, count tags, and shared actions in <scene>.\n- Put character-specific pose, expression, action, and contextually adapted clothing in the matching <apchar> block.\n- If a registered character has an <apchar_outfit> field, treat it as their default clothing reference. Adapt it freely to the scene; do not copy it verbatim.\n- Do not use Character 1: labels inside <scene>.\n</image_generation>`
     },
     linkedPresets: {},
     characterPrompts: {},
@@ -533,9 +594,11 @@ const defaultAutoPicSettings = {
     manualGeneration: { ...MANUAL_DEFAULTS },
 };
 
-const STRUCTURED_BLOCKS_PROMPT_VERSION = 4;
-const STRUCTURED_BLOCKS_PROMPT = `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this exact format:\n<autopic>\n<scene>danbooru tags for character counts, background, location, mood, composition, camera distance, lighting, shared actions, and non-character situation only</scene>\n<apchar ref="exact registered ref name">danbooru tags for this registered character's temporary expression, pose, gaze, action, interaction, and outfit changes only</apchar>\n<apchar>danbooru tags for one unregistered character's full visual appearance, clothing, expression, pose, gaze, action, and interaction</apchar>\n<uc>optional negative danbooru tags only when needed</uc>\n</autopic>\nRef rules:\n- <autopic_registered_characters> is the complete allow-list for ref names.\n- Use <apchar ref="exact name"> only when that exact name appears in <autopic_registered_characters>.\n- Copy ref names exactly. Do not translate, rename, shorten, complete, or guess them.\n- Do not use {{char}}, {{user}}, chat names, aliases, nicknames, relationship names, or inferred names as ref unless that exact string appears in <autopic_registered_characters>.\n- If a character is not listed, never use ref for that character. Use plain <apchar> and include full visual appearance tags.\nTag rules:\n- Write concise English NovelAI/danbooru-style tags, separated by commas.\n- AutoPic assembles NovelAI character prompts. Do not write a final combined NovelAI prompt yourself.\n- For registered characters, do not describe base appearance; AutoPic adds it automatically.\n- For registered characters, write only temporary expression, pose, gaze, action, interaction, and outfit changes inside <apchar ref>.\n- Put count tags such as 1girl, 1boy, 2girls, 1girl 1boy in <scene>.\n- Put background, place, mood, composition, camera distance, lighting, and shared actions in <scene>.\n- Do not use Character 1: labels.\n- Do not use the old <pic prompt="..."> format.\n</image_generation>`;
-const STRICT_TAG_BLOCKS_PROMPT = `<image_generation>\nOutput exactly one block when an image is needed:\n<autopic>\n<scene>1girl/1boy/count tags, background, location, composition, camera distance, lighting, shared actions</scene>\n<apchar ref="name from the valid ref list">ONLY temporary tags: expression, pose, gaze, action, interaction, temporary outfit changes. NO hair, eyes, body, skin, species, age, or permanent clothing.</apchar>\n<apchar>FULL character tags for an unregistered character: gender/count, hair, eyes, body, skin, species, age impression, clothing, expression, pose, gaze, action, interaction.</apchar>\n<uc>negative tags if needed</uc>\n</autopic>\n\nValid ref list rule:\n- The only valid ref names are inside <autopic_registered_characters>.\n- Use <apchar ref=\"exact name\"> only for a name copied exactly from that list.\n- Never use {{char}}, {{user}}, chat names, aliases, nicknames, or guessed names as ref unless the exact string is in the list.\n\nImportant difference:\n- Registered/listed character = <apchar ref=\"name\">temporary tags only; AutoPic adds base appearance.</apchar>\n- Unregistered/not listed character = <apchar>full appearance tags; do not use ref.</apchar>\n\nBad:\n<apchar ref=\"Alice\">1girl, blonde hair, green eyes, school uniform, smiling</apchar>\nGood if Alice is listed:\n<apchar ref=\"Alice\">smiling, looking at viewer, standing, holding cup</apchar>\nGood if Alice is not listed:\n<apchar>1girl, blonde hair, green eyes, school uniform, smiling, looking at viewer, standing, holding cup</apchar>\n\nUse comma-separated English NovelAI/danbooru tags only. Do not use Character 1 labels or <pic prompt=\"...\">.\n</image_generation>`;
+const STRUCTURED_BLOCKS_PROMPT_VERSION = 6;
+const STRICT_TAG_BLOCKS_PROMPT_VERSION = 3;
+const BUILT_IN_PROMPT_UPDATE_OFFER_VERSION = `${STRUCTURED_BLOCKS_PROMPT_VERSION}:${STRICT_TAG_BLOCKS_PROMPT_VERSION}`;
+const STRUCTURED_BLOCKS_PROMPT = `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this exact format:\n<autopic>\n<scene>danbooru tags for character counts, background, location, mood, composition, camera distance, lighting, shared actions, and non-character situation only</scene>\n<apchar ref="exact registered ref name">danbooru tags for this registered character's temporary expression, pose, gaze, action, interaction, and contextually adapted outfit only</apchar>\n<apchar>danbooru tags for one unregistered character's full visual appearance, clothing, expression, pose, gaze, action, and interaction</apchar>\n<uc>optional negative danbooru tags only when needed</uc>\n</autopic>\n\n# Ref rules:\n- <autopic_registered_characters> is the complete allow-list for ref names.\n- Use <apchar ref="exact name"> only when that exact name appears in <autopic_registered_characters>.\n- Copy ref names exactly. Do not translate, rename, shorten, complete, or guess them.\n- Do not use {{char}}, {{user}}, chat names, aliases, nicknames, relationship names, or inferred names as ref unless that exact string appears in <autopic_registered_characters>.\n- If a character is not listed, never use ref for that character. Use plain <apchar> and include full visual appearance tags.\n\n# Tag rules:\n- Write concise English NovelAI/danbooru-style tags, separated by commas.\n- AutoPic assembles NovelAI character prompts. Do not write a final combined NovelAI prompt yourself.\n- For registered characters, do not describe base appearance; AutoPic adds it automatically.\n- For registered characters, write only temporary expression, pose, gaze, action, interaction, and contextually adapted outfit inside <apchar ref>.\n- If a registered character has an <apchar_outfit> field, treat it as their default clothing reference. Adapt it freely to the scene's location, situation, formality, and context. Keep matching clothing items when they fit; partial wear, layering, removal, or style variations are valid. If the scene implies a different outfit entirely, use that instead.\n- Put count tags such as 1girl, 1boy, 2girls, 1girl 1boy in <scene>.\n- Put background, place, mood, composition, camera distance, lighting, and shared actions in <scene>.\n- Do not use Character 1: labels.\n- Do not use the old <pic prompt="..."> format.\n</image_generation>`;
+const STRICT_TAG_BLOCKS_PROMPT = `<image_generation>\nOutput exactly one block when an image is needed:\n<autopic>\n<scene>1girl/1boy/count tags, background, location, composition, camera distance, lighting, shared actions</scene>\n<apchar ref="name from the valid ref list">ONLY temporary tags: expression, pose, gaze, action, interaction, contextually adapted outfit. NO hair, eyes, body, skin, species, age, or fixed permanent clothing.</apchar>\n<apchar>FULL character tags for an unregistered character: gender/count, hair, eyes, body, skin, species, age impression, clothing, expression, pose, gaze, action, interaction.</apchar>\n<uc>negative tags if needed</uc>\n</autopic>\n\n# Valid ref list rule:\n- The only valid ref names are inside <autopic_registered_characters>.\n- Use <apchar ref=\"exact name\"> only for a name copied exactly from that list.\n- Never use {{char}}, {{user}}, chat names, aliases, nicknames, or guessed names as ref unless the exact string is in the list.\n\n# Important difference:\n- Registered/listed character = <apchar ref=\"name\">temporary tags only; AutoPic adds base appearance.</apchar>\n- Unregistered/not listed character = <apchar>full appearance tags; do not use ref.</apchar>\n\n# Outfit note:\n- A registered character may have a clothing reference in <apchar_outfit>. This is a baseline, not a fixed prompt. Interpret it as their typical style and adapt to the scene: use the listed clothing when it fits, make casual variants, partial wear, weather/location-appropriate versions, or complete outfit changes when context calls for it. Do not blindly paste the entire reference; convert the relevant parts into scene-fit tags.\n\n# Bad:\n<apchar ref=\"Alice\">1girl, blonde hair, green eyes, school uniform, smiling</apchar>\n# Good if Alice is listed:\n<apchar ref=\"Alice\">smiling, looking at viewer, standing, holding cup</apchar>\n# Good if Alice is not listed:\n<apchar>1girl, blonde hair, green eyes, school uniform, smiling, looking at viewer, standing, holding cup</apchar>\n\nUse comma-separated English NovelAI/danbooru tags only. Do not use Character 1 labels or <pic prompt=\"...\">.\n</image_generation>`;
 
 defaultAutoPicSettings.promptInjection.prompt = STRUCTURED_BLOCKS_PROMPT;
 defaultAutoPicSettings.promptPresets.Default = STRUCTURED_BLOCKS_PROMPT;
@@ -585,11 +648,58 @@ function updateUI() {
     }
 }
 
+async function offerBuiltInPromptPresetUpdateIfNeeded() {
+    const settings = extension_settings[extensionName];
+    if (!settings?.promptPresets) return;
+
+    const needsStructuredUpdate = settings.structuredBlocksPromptVersion !== STRUCTURED_BLOCKS_PROMPT_VERSION;
+    const needsStrictUpdate = settings.strictTagBlocksPromptVersion !== STRICT_TAG_BLOCKS_PROMPT_VERSION;
+    const alreadyOffered = settings.builtInPromptUpdateOfferVersion === BUILT_IN_PROMPT_UPDATE_OFFER_VERSION;
+
+    if ((!needsStructuredUpdate && !needsStrictUpdate) || alreadyOffered) {
+        return;
+    }
+
+    const previousStructuredBlocksPrompt = settings.promptPresets["Structured Blocks"];
+    const previousStrictTagBlocksPrompt = settings.promptPresets["Strict Tag Blocks"];
+
+    const shouldOverwrite = await callGenericPopup(
+        'AutoPic built-in prompt presets were updated.\n\nOverwrite "Structured Blocks" and "Strict Tag Blocks" with the latest defaults?\n\nCustom presets with other names will not be touched.',
+        POPUP_TYPE.CONFIRM,
+        '',
+        { okButton: 'Overwrite', cancelButton: 'Keep mine' },
+    );
+
+    settings.builtInPromptUpdateOfferVersion = BUILT_IN_PROMPT_UPDATE_OFFER_VERSION;
+
+    if (shouldOverwrite) {
+        settings.promptPresets["Structured Blocks"] = STRUCTURED_BLOCKS_PROMPT;
+        settings.promptPresets["Strict Tag Blocks"] = STRICT_TAG_BLOCKS_PROMPT;
+        settings.structuredBlocksPromptVersion = STRUCTURED_BLOCKS_PROMPT_VERSION;
+        settings.strictTagBlocksPromptVersion = STRICT_TAG_BLOCKS_PROMPT_VERSION;
+
+        if (settings.promptInjection?.prompt === previousStructuredBlocksPrompt) {
+            settings.promptInjection.prompt = STRUCTURED_BLOCKS_PROMPT;
+        } else if (settings.promptInjection?.prompt === previousStrictTagBlocksPrompt) {
+            settings.promptInjection.prompt = STRICT_TAG_BLOCKS_PROMPT;
+        }
+
+        toastr.success('AutoPic default prompts updated.');
+    } else {
+        toastr.info('AutoPic default prompt update skipped.');
+    }
+
+    saveSettingsDebounced();
+}
+
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
 
     if (Object.keys(extension_settings[extensionName]).length === 0) {
         Object.assign(extension_settings[extensionName], defaultAutoPicSettings);
+        extension_settings[extensionName].structuredBlocksPromptVersion = STRUCTURED_BLOCKS_PROMPT_VERSION;
+        extension_settings[extensionName].strictTagBlocksPromptVersion = STRICT_TAG_BLOCKS_PROMPT_VERSION;
+        extension_settings[extensionName].builtInPromptUpdateOfferVersion = BUILT_IN_PROMPT_UPDATE_OFFER_VERSION;
     } else {
         if (!extension_settings[extensionName].promptInjection) {
             extension_settings[extensionName].promptInjection = defaultAutoPicSettings.promptInjection;
@@ -609,25 +719,17 @@ async function loadSettings() {
         }
         if (!extension_settings[extensionName].promptPresets) {
             extension_settings[extensionName].promptPresets = JSON.parse(JSON.stringify(defaultAutoPicSettings.promptPresets));
-        }
-        if (
-            !extension_settings[extensionName].promptPresets["Structured Blocks"] ||
-            extension_settings[extensionName].structuredBlocksPromptVersion !== STRUCTURED_BLOCKS_PROMPT_VERSION
-        ) {
-            const previousStructuredBlocksPrompt = extension_settings[extensionName].promptPresets["Structured Blocks"];
-            const activePromptUsesStructuredBlocks =
-                extension_settings[extensionName].promptInjection?.prompt === previousStructuredBlocksPrompt;
-            extension_settings[extensionName].promptPresets["Structured Blocks"] = STRUCTURED_BLOCKS_PROMPT;
             extension_settings[extensionName].structuredBlocksPromptVersion = STRUCTURED_BLOCKS_PROMPT_VERSION;
-            if (activePromptUsesStructuredBlocks) {
-                extension_settings[extensionName].promptInjection.prompt = STRUCTURED_BLOCKS_PROMPT;
-            }
+            extension_settings[extensionName].strictTagBlocksPromptVersion = STRICT_TAG_BLOCKS_PROMPT_VERSION;
+            extension_settings[extensionName].builtInPromptUpdateOfferVersion = BUILT_IN_PROMPT_UPDATE_OFFER_VERSION;
         }
         if (!extension_settings[extensionName].promptPresets["Structured Blocks"]) {
-            extension_settings[extensionName].promptPresets["Structured Blocks"] = defaultAutoPicSettings.promptInjection.prompt;
+            extension_settings[extensionName].promptPresets["Structured Blocks"] = STRUCTURED_BLOCKS_PROMPT;
+            extension_settings[extensionName].structuredBlocksPromptVersion = STRUCTURED_BLOCKS_PROMPT_VERSION;
         }
         if (!extension_settings[extensionName].promptPresets["Strict Tag Blocks"]) {
             extension_settings[extensionName].promptPresets["Strict Tag Blocks"] = STRICT_TAG_BLOCKS_PROMPT;
+            extension_settings[extensionName].strictTagBlocksPromptVersion = STRICT_TAG_BLOCKS_PROMPT_VERSION;
         }
         if (!extension_settings[extensionName].linkedPresets) {
             extension_settings[extensionName].linkedPresets = {};
@@ -665,23 +767,26 @@ async function loadSettings() {
     if (!extension_settings[extensionName].promptPresets) {
         extension_settings[extensionName].promptPresets = {};
     }
-    if (
-        !extension_settings[extensionName].promptPresets["Structured Blocks"] ||
-        extension_settings[extensionName].structuredBlocksPromptVersion !== STRUCTURED_BLOCKS_PROMPT_VERSION
-    ) {
-        const previousStructuredBlocksPrompt = extension_settings[extensionName].promptPresets["Structured Blocks"];
-        const activePromptUsesStructuredBlocks =
-            extension_settings[extensionName].promptInjection?.prompt === previousStructuredBlocksPrompt;
+    if (!extension_settings[extensionName].promptPresets["Structured Blocks"]) {
         extension_settings[extensionName].promptPresets["Structured Blocks"] = STRUCTURED_BLOCKS_PROMPT;
         extension_settings[extensionName].structuredBlocksPromptVersion = STRUCTURED_BLOCKS_PROMPT_VERSION;
-        if (activePromptUsesStructuredBlocks) {
-            extension_settings[extensionName].promptInjection.prompt = STRUCTURED_BLOCKS_PROMPT;
-        }
     }
     if (!extension_settings[extensionName].promptPresets["Strict Tag Blocks"]) {
         extension_settings[extensionName].promptPresets["Strict Tag Blocks"] = STRICT_TAG_BLOCKS_PROMPT;
+        extension_settings[extensionName].strictTagBlocksPromptVersion = STRICT_TAG_BLOCKS_PROMPT_VERSION;
     }
     updateUI();
+}
+
+function scheduleBuiltInPromptPresetUpdateOffer() {
+    setTimeout(async () => {
+        try {
+            await offerBuiltInPromptPresetUpdateIfNeeded();
+            updateUI();
+        } catch (error) {
+            console.warn('[AutoPic] Failed to show built-in prompt update offer:', error);
+        }
+    }, 500);
 }
 
 
@@ -1035,7 +1140,8 @@ function renderCharacterPrompts() {
                 </div>
                 <div style="display:flex; flex-direction:column; gap:8px;">
                     <input class="gen-custom-input char-name-input" data-index="${index}" value="${escapeHtmlAttribute(item.name || '')}" placeholder="Reference name for &lt;apchar ref=&quot;name&quot;&gt;">
-                    <textarea class="gen-custom-input char-prompt-input" data-index="${index}" rows="2" placeholder="캐릭터 외형 프롬프트" style="resize: vertical;">${item.prompt || ''}</textarea>
+                    <textarea class="gen-custom-input char-prompt-input" data-index="${index}" rows="2" placeholder="캐릭터 외형 프롬프트 (AI는 못 봄)" style="resize: vertical;">${item.prompt || ''}</textarea>
+                    <textarea class="gen-custom-input char-clothing-input" data-index="${index}" rows="1" placeholder="캐릭터 의상 프롬프트 (AI가 읽을 수 있음)" style="resize: vertical;">${item.clothing || ''}</textarea>
                     <textarea class="gen-custom-input char-uc-input" data-index="${index}" rows="1" placeholder="캐릭터 UC (선택사항)" style="resize: vertical;">${item.uc || ''}</textarea>
                 </div>
             </div>
@@ -1052,6 +1158,12 @@ function renderCharacterPrompts() {
     $('.char-prompt-input').off('input').on('input', function() {
         const idx = $(this).data('index');
         charData[idx].prompt = $(this).val();
+        saveSettingsDebounced();
+    });
+
+    $('.char-clothing-input').off('input').on('input', function() {
+        const idx = $(this).data('index');
+        charData[idx].clothing = $(this).val();
         saveSettingsDebounced();
     });
 
@@ -1089,7 +1201,7 @@ $(document).off('click', '#add_char_prompt_btn').on('click', '#add_char_prompt_b
         extension_settings[extensionName].characterPrompts[avatarFile] = [];
     }
 
-    extension_settings[extensionName].characterPrompts[avatarFile].push({ name: '', prompt: '', enabled: true });
+    extension_settings[extensionName].characterPrompts[avatarFile].push({ name: '', prompt: '', clothing: '', enabled: true });
     saveSettingsDebounced();
     renderCharacterPrompts();
 });
@@ -1323,6 +1435,7 @@ function buildAvailableCharacterRefsPrompt(charData) {
             .map((item, index) => ({
                 name: String(item?.name ?? '').trim(),
                 prompt: String(item?.prompt ?? '').trim(),
+                clothing: String(item?.clothing ?? '').trim(),
                 enabled: item?.enabled !== false,
                 slot: index + 1,
             }))
@@ -1333,9 +1446,14 @@ function buildAvailableCharacterRefsPrompt(charData) {
         return '';
     }
 
-    const lines = refs.map(item => `- ${item.name}`);
+    const lines = refs.map(item => {
+        if (item.clothing) {
+            return `- ${item.name} | <apchar_outfit>${item.clothing}</apchar_outfit>`;
+        }
+        return `- ${item.name}`;
+    });
 
-    return `\n\n<autopic_registered_characters>\nThese are the only valid ref names for <apchar ref=\"...\">. Use a ref only when the exact name is listed here. If no exact name matches, use plain <apchar> with full visual tags instead.\n${lines.join('\n')}\n</autopic_registered_characters>`;
+    return `\n\n<autopic_registered_characters>\nThese are the only valid ref names for <apchar ref=\"...\">. Use a ref only when the exact name is listed before the '|' symbol. <apchar_outfit> is a default clothing reference, not fixed output text.\n${lines.join('\n')}\n</autopic_registered_characters>`;
 }
 
 function getFinalPrompt() {
@@ -1711,6 +1829,7 @@ $(function () {
         await loadSettings();
         await addToWandMenu();
         await createSettings(settingsHtml);
+        scheduleBuiltInPromptPresetUpdateOffer();
 
         $('#extensions-settings-button').on('click', () => setTimeout(updateUI, 200));
 
@@ -1817,15 +1936,17 @@ $(function () {
             
             const imgTitle = $visibleImg.attr('title') || $visibleImg.attr('alt') || "";
             
-            handleReroll(mesId, imgTitle);
+            handleReroll(mesId, imgTitle, null, $visibleImg.attr('src') || '');
         });
 
         $(document).off('click', '.reroll-trigger').on('click', '.reroll-trigger', function(e) {
             e.preventDefault(); 
-            e.stopPropagation();
+            e.stopImmediatePropagation();
             const mesId = $(this).data('mesid');
             const prompt = $(this).data('prompt');
-            handleReroll(mesId, prompt);
+            const autopicId = $(this).attr('data-autopic-id');
+            const imageSrc = $(this).attr('data-image-src') || '';
+            handleReroll(mesId, prompt, autopicId, imageSrc);
         });
         $(document).on('click', '.swipe_left, .swipe_right', function () {
             const $message = $(this).closest('.mes');
@@ -2120,9 +2241,10 @@ async function handleManualGenerate(mesId) {
     }
 }
 
-async function handleReroll(mesId, currentPrompt, targetAutopicId = null) {
+async function handleReroll(mesId, currentPrompt, targetAutopicId = null, targetImageSrc = null) {
     currentPrompt = decodeHtmlAttribute(String(currentPrompt ?? ''));
     targetAutopicId = decodeHtmlAttribute(String(targetAutopicId ?? ''));
+    targetImageSrc = decodeHtmlAttribute(String(targetImageSrc ?? ''));
     if (!SlashCommandParser.commands['sd']) {
         toastr.error("Stable Diffusion extension not loaded.");
         return;
@@ -2138,7 +2260,8 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null) {
     
     let foundItems = [];
 
-    const clickedImageTag = getAutopicImageTagById(message.mes, targetAutopicId);
+    const clickedImageTag = getAutopicImageTagById(message.mes, targetAutopicId)
+        || getAutopicImageTagBySrc(message.mes, targetImageSrc);
     if (clickedImageTag) {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = clickedImageTag;
@@ -2152,6 +2275,8 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null) {
             _parsedNaiPayload: prepared.naiPayload,
             _parsedPrompt: prepared.prompt,
             type: insertType === INSERT_TYPE.REPLACE ? 'tag' : 'swipe',
+            targetAutopicId,
+            targetImageSrc,
         });
     }
 
@@ -2199,7 +2324,7 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null) {
     }
 
     // 2. 본문 내 <img> 태그 검색 (이미 치환된 경우)
-    let imgMatches = foundItems.length === 0 ? [...message.mes.matchAll(imgRegex)] : [];
+    let imgMatches = clickedImageTag ? [] : [...message.mes.matchAll(imgRegex)];
     imgMatches.forEach(m => {
         const fullTag = m[0];
         const tempDiv = document.createElement('div');
@@ -2227,7 +2352,8 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null) {
     });
 
     // 3. 메시지 extra 데이터 (이미 생성된 갤러리 이미지들)
-    if (message.extra && message.extra.image_swipes && message.extra.image_swipes.length > 0) {
+    const shouldIncludeSwipeCandidates = insertType !== INSERT_TYPE.REPLACE || foundItems.length === 0;
+    if (shouldIncludeSwipeCandidates && message.extra && message.extra.image_swipes && message.extra.image_swipes.length > 0) {
         const structuredSource = foundItems.find(i => i._parsedNaiPayload);
         message.extra.image_swipes.forEach((src, sIdx) => {
             const savedPayload = Array.isArray(message.extra.autopic_swipe_payloads)
@@ -2284,7 +2410,13 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null) {
     }
 
     let selectedIdx = 0;
-    const initialMatchIdx = foundItems.findIndex(item => item.prompt === currentPrompt);
+    const targetMatchIdx = foundItems.findIndex(item =>
+        (targetAutopicId && item.targetAutopicId === targetAutopicId) ||
+        (targetImageSrc && (item.targetImageSrc === targetImageSrc || message.extra?.image_swipes?.[item.swipeIdx] === targetImageSrc))
+    );
+    const initialMatchIdx = targetMatchIdx !== -1
+        ? targetMatchIdx
+        : foundItems.findIndex(item => item.prompt === currentPrompt);
     if (initialMatchIdx !== -1) selectedIdx = initialMatchIdx;
 
     let editedPrompts = foundItems.map(item => item.prompt);
@@ -2365,16 +2497,24 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null) {
                         const titleForTag = generationPrompt.editText || generationPrompt.prompt || '';
                         const newTag = createAutopicImageTag(resultUrl, titleForTag, 'tag');
                         message.mes = targetItem.originalTag
-                            ? replaceOrAppendAutopicTag(message.mes, targetItem.originalTag, newTag)
+                            ? replaceExactAutopicTargetOrAppend(message.mes, targetItem.originalTag, newTag)
                             : replaceFirstAutopicImageOrAppend(message.mes, newTag);
                     } 
 
                     else {
                         if (!message.extra) message.extra = {};
-                        if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
+        if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
                         
                         if (targetItem.swipeIdx !== undefined) {
                             message.extra.image_swipes[targetItem.swipeIdx] = resultUrl;
+                        } else if (targetImageSrc) {
+                            const targetSwipeIdx = message.extra.image_swipes.findIndex(src => src === targetImageSrc);
+                            if (targetSwipeIdx !== -1) {
+                                message.extra.image_swipes[targetSwipeIdx] = resultUrl;
+                                targetItem.swipeIdx = targetSwipeIdx;
+                            } else {
+                                message.extra.image_swipes.push(resultUrl);
+                            }
                         } else {
                             message.extra.image_swipes.push(resultUrl);
                         }
@@ -2648,6 +2788,7 @@ async function attachTagControls(mesId) {
             $btn.attr('data-mesid', mesId);
             $btn.attr('data-prompt', title);
             $btn.attr('data-autopic-id', autopicId);
+            $btn.attr('data-image-src', src);
             $controls.append($btn);
             $img.after($controls);
         }
@@ -2689,9 +2830,10 @@ eventSource.on(event_types.CHAT_CHANGED, () => {
 
 $(document).off('click', '.reroll-trigger').on('click', '.reroll-trigger', function(e) {
     e.preventDefault(); 
-    e.stopPropagation();
+    e.stopImmediatePropagation();
     const mesId = $(this).data('mesid');
     const prompt = $(this).data('prompt');
     const autopicId = $(this).attr('data-autopic-id');
-    handleReroll(mesId, prompt, autopicId);
+    const imageSrc = $(this).attr('data-image-src') || '';
+    handleReroll(mesId, prompt, autopicId, imageSrc);
 });
