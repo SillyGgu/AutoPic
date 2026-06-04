@@ -135,6 +135,74 @@
                             </span>
                         </label>
                     </div>
+                    <!-- ★ Vibe Transfer -->
+                    <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--ap-border);">
+                        <label class="gen-checkbox-label" for="nai_vibe_enabled">
+                            <input type="checkbox" id="nai_vibe_enabled">
+                            <span>
+                                Vibe Transfer 사용
+                                <small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
+                                    레퍼런스 이미지의 스타일/분위기를 생성에 반영합니다. 이미지를 최대 여러 장 등록할 수 있습니다.
+                                </small>
+                            </span>
+                        </label>
+                        <div id="nai_vibe_options" style="margin-top:12px; opacity:0.4; pointer-events:none;">
+                            <div id="nai_vibe_list" style="display:flex; flex-direction:column; gap:10px; margin-bottom:10px;"></div>
+                            <button id="nai_vibe_add_btn" class="gen-btn gen-btn-dark" style="width:100%; justify-content:center;">
+                                <i class="fa-solid fa-plus"></i> 이미지 추가
+                            </button>
+                        </div>
+                    </div>
+                    <!-- ★ 레퍼런스 이미지 (Precise / Director Reference) -->
+                    <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--ap-border);">
+                        <label class="gen-checkbox-label" for="nai_ref_enabled">
+                            <input type="checkbox" id="nai_ref_enabled">
+                            <span>
+                                레퍼런스 이미지 (Reference)
+                                <small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
+                                    참조 이미지의 캐릭터/스타일을 생성에 반영합니다. 인코딩이 없어 추가 Anlas가 들지 않습니다. Vibe Transfer와 동시에 사용할 수 없습니다.
+                                </small>
+                            </span>
+                        </label>
+                        <div id="nai_ref_options" style="margin-top:12px; opacity:0.4; pointer-events:none;">
+                            <div id="nai_ref_preview" style="display:flex; gap:10px; align-items:flex-start; background:var(--ap-bg-item); padding:10px; border-radius:8px; border:1px solid var(--ap-border); margin-bottom:10px;"></div>
+                            <button id="nai_ref_add_btn" class="gen-btn gen-btn-dark" style="width:100%; justify-content:center;">
+                                <i class="fa-solid fa-plus"></i> 레퍼런스 이미지 선택
+                            </button>
+                            <div style="margin-top:12px;">
+                                <span style="font-size:0.78rem; color:var(--ap-text-vague); display:block; margin-bottom:4px;">참조 종류</span>
+                                <select id="nai_ref_mode" class="gen-custom-input" style="width:100%;">
+                                    <option value="character&style">Character &amp; Style</option>
+                                    <option value="character">Character</option>
+                                    <option value="style">Style</option>
+                                </select>
+                            </div>
+                            <div style="margin-top:12px;">
+                                <div style="display:flex; justify-content:space-between;">
+                                    <span style="font-size:0.78rem; color:var(--ap-text-vague);">Strength</span>
+                                    <span id="nai_ref_strength_display" style="font-size:0.78rem; font-weight:bold; color:var(--ap-accent);">1.00</span>
+                                </div>
+                                <input type="range" id="nai_ref_strength" class="neo-range-slider"
+                                    min="0.0" max="1.0" step="0.01" value="1.0"
+                                    style="width:100%; accent-color: var(--ap-accent);">
+                                <p style="font-size: 0.72rem; color: var(--ap-text-vague); margin-top: 4px; line-height: 1.4;">
+                                    값이 높을수록 참조 이미지의 영향(포즈·구도·색)이 강해집니다. (기본 1.00)
+                                </p>
+                            </div>
+                            <div style="margin-top:8px;">
+                                <div style="display:flex; justify-content:space-between;">
+                                    <span style="font-size:0.78rem; color:var(--ap-text-vague);">Fidelity</span>
+                                    <span id="nai_ref_fidelity_display" style="font-size:0.78rem; font-weight:bold; color:var(--ap-accent);">1.00</span>
+                                </div>
+                                <input type="range" id="nai_ref_fidelity" class="neo-range-slider"
+                                    min="0.0" max="1.0" step="0.01" value="1.0"
+                                    style="width:100%; accent-color: var(--ap-accent);">
+                                <p style="font-size: 0.72rem; color: var(--ap-text-vague); margin-top: 4px; line-height: 1.4;">
+                                    1에 가까울수록 캐릭터의 세부 디테일을 더 정확히 살립니다. 0이면 스타일·구도에 더 유연합니다. (기본 1.00)
+                                </p>
+                            </div>
+                        </div>
+                    </div>
 					<p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-top: 10px; line-height: 1.5;">
 						※ 캐릭터 외형 프롬프트 탭에서 등록된 Character Prompt 및 UC도 플러그인이 켜져 있을 때만 NAI에 전송됩니다.
 					</p>

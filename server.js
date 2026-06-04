@@ -94,9 +94,9 @@ router.post('/generate-image', async (request, response) => {
                         : null,
                     use_coords: false,
                     characterPrompts: [],
-                    reference_image_multiple: [],
-                    reference_information_extracted_multiple: [],
-                    reference_strength_multiple: [],
+                    reference_image_multiple: Array.isArray(body.reference_image_multiple) ? body.reference_image_multiple : [],
+                    reference_information_extracted_multiple: Array.isArray(body.reference_information_extracted_multiple) ? body.reference_information_extracted_multiple : [],
+                    reference_strength_multiple: Array.isArray(body.reference_strength_multiple) ? body.reference_strength_multiple : [],
                     v4_negative_prompt: {
                         caption: {
                             base_caption: body.negative_prompt ?? '',
