@@ -54,13 +54,20 @@ function getCurrentAutopicCharacterPromptsForNai() {
 function shouldUseAutopicNaiProxy() {
     const nai = getNaiParams();
     if (!nai?.useServerPlugin) return !!pendingNaiPayload;
+    const seedValue = Number(nai?.seed);
+    const seedActive = !!nai?.seedEnabled && Number.isInteger(seedValue) && seedValue >= 0;
     // ★ Vibe가 켜져 있고 base64 이미지가 하나라도 있으면 무조건 프록시 경유(서버에서 encode-vibe 수행)
     const vibeActive = !!nai?.vibeEnabled
         && Array.isArray(nai?.vibeImages)
         && nai.vibeImages.some(v => v?.base64);
     // ★ 레퍼런스가 켜져 있고 이미지가 있으면 무조건 프록시 경유
     const refActive = !!nai?.refEnabled && !!nai?.refImage;
-    return !!pendingNaiPayload || !!nai?.useNaiRescale || vibeActive || refActive || getCurrentAutopicCharacterPromptsForNai().length > 0;
+	return !!pendingNaiPayload
+		|| Number(nai?.cfg_rescale ?? 0) > 0
+		|| seedActive
+		|| vibeActive
+		|| refActive
+		|| getCurrentAutopicCharacterPromptsForNai().length > 0;
 }
 
 // ── NAI fetch 인터셉터 ────────────────────────────────────────
@@ -115,6 +122,10 @@ function shouldUseAutopicNaiProxy() {
 
                 body.cfg_rescale = cfg;
                 body.character_positions_ai_choice = !!naiParams?.useCharacterPositionsAiChoice;
+                const seedValue = Number(naiParams?.seed);
+                if (naiParams?.seedEnabled && Number.isInteger(seedValue) && seedValue >= 0) {
+                    body.seed = seedValue;
+                }
 
                 // Vibe Transfer 주입
                 if (naiParams?.vibeEnabled && Array.isArray(naiParams?.vibeImages) && naiParams.vibeImages.length > 0) {
@@ -197,6 +208,8 @@ const NAI_DEFAULTS = {
     useNaiRescale: false,
     useServerPlugin: false,
     useCharacterPositionsAiChoice: true,
+    seedEnabled: false,
+    seed: '',
     // Vibe Transfer
     vibeEnabled: false,
     vibeImages: [],          // [{ base64: string, infoExtracted: number, strength: number, favorite: boolean }]
@@ -240,6 +253,7 @@ const INSERT_TYPE = {
 };
 
 let pendingNaiPayload = null;
+const autopicMessageObservers = new Map();
 
 function initializeAllManualButtons() {
     const context = getContext();
@@ -322,6 +336,53 @@ function createAutopicImageTag(src, title, idPrefix = 'tag') {
     const tagId = `${idPrefix}-${Date.now()}`;
     const titleText = escapeHtmlAttribute(String(title || ''));
     return `<img src="${escapeHtmlAttribute(src)}" data-autopic-id="${tagId}" title="${titleText}">`;
+}
+
+function getScrollableParents(element) {
+    const parents = [];
+    let current = element?.parentElement;
+
+    while (current && current !== document.body && current !== document.documentElement) {
+        const style = window.getComputedStyle(current);
+        const overflowY = style.overflowY;
+        const canScroll = /(auto|scroll|overlay)/.test(overflowY) && current.scrollHeight > current.clientHeight;
+        if (canScroll) parents.push(current);
+        current = current.parentElement;
+    }
+
+    parents.push(document.scrollingElement || document.documentElement);
+    return [...new Set(parents)];
+}
+
+function captureMessageScrollState(mesId) {
+    const messageElement = document.querySelector(`.mes[mesid="${mesId}"]`);
+    if (!messageElement) return null;
+
+    return {
+        mesId,
+        top: messageElement.getBoundingClientRect().top,
+        parents: getScrollableParents(messageElement).map(element => ({ element, scrollTop: element.scrollTop })),
+    };
+}
+
+function restoreMessageScrollState(state) {
+    if (!state) return;
+
+    for (const item of state.parents) {
+        if (item.element) item.element.scrollTop = item.scrollTop;
+    }
+
+    const messageElement = document.querySelector(`.mes[mesid="${state.mesId}"]`);
+    const scrollingElement = document.scrollingElement || document.documentElement;
+    if (messageElement && scrollingElement) {
+        const delta = messageElement.getBoundingClientRect().top - state.top;
+        scrollingElement.scrollTop += delta;
+    }
+}
+
+function scheduleMessageScrollRestore(state) {
+    restoreMessageScrollState(state);
+    [0, 50, 150, 350].forEach(delay => setTimeout(() => restoreMessageScrollState(state), delay));
 }
 
 function findFirstAutopicImageRange(messageText) {
@@ -689,6 +750,8 @@ function updateUI() {
         $('#nai_character_positions_ai_choice').prop('checked', !!nai.useCharacterPositionsAiChoice);
 		$('#nai_cfg_rescale').val(nai.cfg_rescale);
 		$('#nai_cfg_rescale_display').text(Number(nai.cfg_rescale).toFixed(2));
+        $('#nai_seed_enabled').prop('checked', !!nai.seedEnabled);
+        $('#nai_seed_value').val(nai.seed ?? '');
         // Vibe Transfer UI 동기화
         $('#nai_vibe_enabled').prop('checked', !!nai.vibeEnabled);
         $('#nai_vibe_options').css({ opacity: nai.vibeEnabled ? '1' : '0.4', 'pointer-events': nai.vibeEnabled ? 'auto' : 'none' });
@@ -708,7 +771,7 @@ function updateUI() {
         $('#autopic_manual_profile').val(manual.profileId || '');
         $('#autopic_manual_max_tokens').val(manual.maxTokens);
         // NAI Rescale 비활성화 시 카드 흐리게
-        $('#nai-params-card').css('opacity', nai.useNaiRescale && extension_settings?.sd?.source === 'novel' ? '1' : '0.5');
+        $('#nai-params-card').css('opacity', nai.useServerPlugin && extension_settings?.sd?.source === 'novel' ? '1' : '0.5');
 
         $('.theme-dot').removeClass('active');
         $(`.theme-dot[data-theme="${currentTheme}"]`).addClass('active');
@@ -902,6 +965,15 @@ async function createSettings(settingsHtml) {
         
         if (targetTabId === 'tab-gen-linking') renderCharacterLinkUI();
         if (targetTabId === 'tab-gen-templates') renderCharacterPrompts();
+    });
+
+    $(document).off('click', '.nai-param-nav-item').on('click', '.nai-param-nav-item', function() {
+        const targetTabId = $(this).data('nai-tab');
+        const $container = $(this).closest('#nai_plugin_options');
+        $container.find('.nai-param-nav-item').removeClass('active');
+        $(this).addClass('active');
+        $container.find('.nai-param-tab-content').removeClass('active');
+        $container.find('#' + targetTabId).addClass('active');
     });
 
 
@@ -1110,9 +1182,21 @@ async function createSettings(settingsHtml) {
     // ── NAI cfg_rescale 바인딩 ────────────────────────────────
 	$('#nai_use_server_plugin').on('change', function() {
 		const enabled = $(this).prop('checked');
-		getNaiParams().useServerPlugin = enabled;
-		getNaiParams().useNaiRescale = enabled ? getNaiParams().useNaiRescale : false;
-		$('#nai_plugin_options').css({ opacity: enabled ? '1' : '0.4', 'pointer-events': enabled ? 'auto' : 'none' });
+		const nai = getNaiParams();
+
+		nai.useServerPlugin = enabled;
+		nai.useNaiRescale = enabled;
+
+		$('#nai_plugin_options').css({
+			opacity: enabled ? '1' : '0.4',
+			'pointer-events': enabled ? 'auto' : 'none',
+		});
+
+		$('#nai-params-card').css(
+			'opacity',
+			enabled && extension_settings?.sd?.source === 'novel' ? '1' : '0.5',
+		);
+
 		saveSettingsDebounced();
 	});
 
@@ -1122,6 +1206,24 @@ async function createSettings(settingsHtml) {
 		$('#nai_cfg_rescale_display').text(getNaiParams().cfg_rescale.toFixed(2));
 		saveSettingsDebounced();
 	});
+    $('#nai_seed_enabled').on('change', function() {
+        getNaiParams().seedEnabled = $(this).prop('checked');
+        saveSettingsDebounced();
+    });
+    $('#nai_seed_value').on('input', function() {
+        const value = String($(this).val() ?? '').trim();
+        getNaiParams().seed = value;
+        saveSettingsDebounced();
+    });
+    $('#nai_seed_clear_btn').on('click', function(e) {
+        e.preventDefault();
+        const nai = getNaiParams();
+        nai.seed = '';
+        nai.seedEnabled = false;
+        $('#nai_seed_value').val('');
+        $('#nai_seed_enabled').prop('checked', false);
+        saveSettingsDebounced();
+    });
     $('#nai_character_positions_ai_choice').on('change', function() {
         getNaiParams().useCharacterPositionsAiChoice = $(this).prop('checked');
         saveSettingsDebounced();
@@ -2065,27 +2167,6 @@ $(function () {
 					text-shadow: 0 1px 2px rgba(0,0,0,0.6) !important;
 				}
 
-				/* ===============================
-				   4. 모바일 전용 (수정됨)
-				================================ */
-                .mobile-ui-toggle {
-                    display: block;
-                    position: absolute;
-                    top: 5px;
-                    left: 5px;
-                    width: 30px;
-                    height: 30px;
-                    background: rgba(0,0,0,0.5);
-                    color: white;
-                    border-radius: 50%;
-                    text-align: center;
-                    line-height: 30px;
-                    font-size: 15px;
-                    cursor: pointer;
-                    z-index: 100;
-                    opacity: 0.6;
-                }
-                
                 .mes_img_swipe_left, .mes_img_swipe_right {
                     min-width: 40px !important;
                     min-height: 40px !important;
@@ -2128,9 +2209,6 @@ $(function () {
                         opacity: 1 !important;
                     }
                 }
-                }
-                @media (min-width: 1000px) {
-                    .mobile-ui-toggle { display: none; }
                 }
 
 				.mes_media_container::after {
@@ -2291,8 +2369,11 @@ $(function () {
             refreshAutopicMessageControls(mesId);
         });
 
-        eventSource.on(event_types.MESSAGE_SWIPED, (mesId) => {
-            refreshAutopicMessageControls(mesId, [80, 250]);
+        eventSource.on(event_types.MESSAGE_SWIPED, (eventData) => {
+            const mesId = typeof eventData === 'object'
+                ? eventData?.messageId ?? eventData?.mesId ?? eventData?.id
+                : eventData;
+            refreshAutopicMessageControls(mesId, [80, 250, 600, 1000]);
         });
 
         eventSource.on(event_types.MESSAGE_SWIPE_DELETED, (eventData) => {
@@ -2302,7 +2383,7 @@ $(function () {
         eventSource.on(event_types.CHAT_CHANGED, () => {
             renderCharacterLinkUI();
             renderCharacterPrompts();
-            initializeAllManualButtons();
+            initializeAllAutopicMessageControls();
 		});
 
         /* -------------------------------------------------------
@@ -2317,7 +2398,7 @@ $(function () {
                 return;
             }
 
-            const isButton = $(target).closest('.right_menu_button, .mes_img_controls, .mes_img_swipes, .mobile-ui-toggle, .autopic-control-btn, .autopic-tag-controls, .reroll-trigger').length > 0;
+            const isButton = $(target).closest('.right_menu_button, .mes_img_controls, .mes_img_swipes, .autopic-control-btn, .autopic-tag-controls, .reroll-trigger').length > 0;
 
             if (window.innerWidth < 1000 && !$mediaContainer.hasClass('ui-active')) {
                 if (!isButton) {
@@ -2357,6 +2438,23 @@ $(function () {
             handleReroll(mesId, imgTitle, null, $visibleImg.attr('src') || '', currentSwipeIdx);
         });
 
+        $(document).off('click', '.image-seed-save-button').on('click', '.image-seed-save-button', async function(e) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+
+            const messageBlock = $(this).closest('.mes');
+            let $visibleImg = messageBlock.find('.mes_img_container:not([style*="display: none"]) img.mes_img');
+            if ($visibleImg.length === 0) $visibleImg = messageBlock.find('img.mes_img').first();
+
+            await saveSeedFromImageSrc($visibleImg.attr('src') || '');
+        });
+
+        $(document).off('click.autopicSeedRefresh', '.mes_img_swipe_left, .mes_img_swipe_right')
+            .on('click.autopicSeedRefresh', '.mes_img_swipe_left, .mes_img_swipe_right', function() {
+                const mesId = $(this).closest('.mes').attr('mesid');
+                scheduleInlineGalleryControlRefresh(mesId);
+            });
+
         $(document).off('click', '.reroll-trigger').on('click', '.reroll-trigger', function(e) {
             e.preventDefault(); 
             e.stopImmediatePropagation();
@@ -2365,6 +2463,11 @@ $(function () {
             const autopicId = $(this).attr('data-autopic-id');
             const imageSrc = $(this).attr('data-image-src') || '';
             handleReroll(mesId, prompt, autopicId, imageSrc);
+        });
+        $(document).off('click', '.autopic-save-seed-trigger').on('click', '.autopic-save-seed-trigger', async function(e) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            await saveSeedFromImageSrc($(this).attr('data-image-src') || '');
         });
         $(document).on('click', '.swipe_left, .swipe_right', function () {
             const $message = $(this).closest('.mes');
@@ -2480,6 +2583,121 @@ function normalizeImageSwipeSrc(src) {
     return value.replace(/^data:image\/[^;,]+;base64,/i, '');
 }
 
+function bytesToText(bytes) {
+    try {
+        return new TextDecoder('utf-8').decode(bytes);
+    } catch (_) {
+        return Array.from(bytes).map(b => String.fromCharCode(b)).join('');
+    }
+}
+
+function findSeedInMetadataText(text) {
+    const value = String(text ?? '');
+    const patterns = [
+        /"seed"\s*:\s*(\d{1,15})/i,
+        /\bseed\b\D{0,40}(\d{1,15})/i,
+    ];
+
+    for (const pattern of patterns) {
+        const match = value.match(pattern);
+        if (match?.[1]) return match[1];
+    }
+
+    return '';
+}
+
+function extractSeedFromPngBuffer(arrayBuffer) {
+    const bytes = new Uint8Array(arrayBuffer);
+    const signature = [137, 80, 78, 71, 13, 10, 26, 10];
+    const isPng = signature.every((value, index) => bytes[index] === value);
+
+    if (isPng) {
+        const view = new DataView(arrayBuffer);
+        let offset = 8;
+
+        while (offset + 8 <= bytes.length) {
+            const length = view.getUint32(offset);
+            const type = bytesToText(bytes.slice(offset + 4, offset + 8));
+            const dataStart = offset + 8;
+            const dataEnd = dataStart + length;
+            if (dataEnd + 4 > bytes.length) break;
+
+            if (type === 'tEXt') {
+                const text = bytesToText(bytes.slice(dataStart, dataEnd));
+                const seed = findSeedInMetadataText(text);
+                if (seed) return seed;
+            } else if (type === 'iTXt') {
+                const data = bytes.slice(dataStart, dataEnd);
+                const zeroIndexes = [];
+                for (let i = 0; i < data.length && zeroIndexes.length < 5; i++) {
+                    if (data[i] === 0) zeroIndexes.push(i);
+                }
+                const textStart = zeroIndexes.length >= 5 ? zeroIndexes[4] + 1 : 0;
+                const text = bytesToText(data.slice(textStart));
+                const seed = findSeedInMetadataText(text);
+                if (seed) return seed;
+            }
+
+            offset = dataEnd + 4;
+        }
+    }
+
+    return findSeedInMetadataText(bytesToText(bytes));
+}
+
+async function getImageArrayBufferFromSrc(src) {
+    const imageSrc = decodeHtmlAttribute(String(src ?? '')).trim();
+    if (!imageSrc) throw new Error('Image source is empty.');
+
+    const dataUrlMatch = imageSrc.match(/^data:image\/[^;,]+;base64,(.+)$/i);
+    if (dataUrlMatch) {
+        const binary = atob(dataUrlMatch[1]);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return bytes.buffer;
+    }
+
+    const response = await fetch(imageSrc, { headers: getRequestHeaders() });
+    if (!response.ok) {
+        throw new Error(`Image fetch failed: ${response.status}`);
+    }
+
+    return await response.arrayBuffer();
+}
+
+function syncNaiSeedUi() {
+    const nai = getNaiParams();
+    $('#nai_seed_enabled').prop('checked', !!nai.seedEnabled);
+    $('#nai_seed_value').val(nai.seed ?? '');
+}
+
+async function saveSeedFromImageSrc(src) {
+    const nai = getNaiParams();
+    if (!nai.useServerPlugin) {
+        toastr.warning('NovelAI 고급 파라미터의 서버 플러그인 사용을 먼저 켜주세요.', 'AutoPic Seed');
+        return;
+    }
+
+    try {
+        const arrayBuffer = await getImageArrayBufferFromSrc(src);
+        const seed = extractSeedFromPngBuffer(arrayBuffer);
+
+        if (!seed) {
+            toastr.warning('현재 이미지에서 Seed 메타데이터를 찾지 못했습니다.', 'AutoPic Seed');
+            return;
+        }
+
+        nai.seed = seed;
+        nai.seedEnabled = true;
+        syncNaiSeedUi();
+        saveSettingsDebounced();
+        toastr.success(`Seed ${seed} 등록 완료`, 'AutoPic Seed');
+    } catch (error) {
+        console.warn('[AutoPic Seed] Failed to save seed from image:', error);
+        toastr.error('현재 이미지의 Seed를 읽지 못했습니다.', 'AutoPic Seed');
+    }
+}
+
 function getCurrentSwipeIndexFromMessageBlock($message) {
     const counterText = $message.find('.mes_img_swipe_counter').first().text().trim();
     const match = counterText.match(/^(\d+)\s*\/\s*(\d+)$/);
@@ -2556,12 +2774,63 @@ function refreshAutopicMessageControls(mesId, delays = [150]) {
     const numericMesId = Number(mesId);
     if (!Number.isInteger(numericMesId)) return;
 
+    observeAutopicMessageControls(numericMesId);
     addRerollButtonToMessage(numericMesId);
     addManualGenerateButtonToMessage(numericMesId);
-    addMobileToggleToMessage(numericMesId);
+    removeMobileToggleFromMessage(numericMesId);
     attachSwipeRerollListeners(numericMesId);
 
-    delays.forEach(delay => setTimeout(() => attachTagControls(numericMesId), delay));
+    delays.forEach(delay => setTimeout(() => {
+        addRerollButtonToMessage(numericMesId);
+        removeMobileToggleFromMessage(numericMesId);
+        attachSwipeRerollListeners(numericMesId);
+        attachTagControls(numericMesId);
+    }, delay));
+}
+
+function observeAutopicMessageControls(mesId) {
+    const numericMesId = Number(mesId);
+    if (!Number.isInteger(numericMesId)) return;
+
+    const messageElement = document.querySelector(`.mes[mesid="${numericMesId}"]`);
+    if (!messageElement) return;
+
+    const existing = autopicMessageObservers.get(numericMesId);
+    if (existing?.target === messageElement) return;
+    if (existing?.observer) existing.observer.disconnect();
+
+    let scheduled = false;
+    const observer = new MutationObserver(() => {
+        if (scheduled) return;
+        scheduled = true;
+        requestAnimationFrame(() => {
+            scheduled = false;
+            addRerollButtonToMessage(numericMesId);
+            removeMobileToggleFromMessage(numericMesId);
+        });
+    });
+
+    observer.observe(messageElement, { childList: true, subtree: true });
+    autopicMessageObservers.set(numericMesId, { observer, target: messageElement });
+}
+
+function initializeAllAutopicMessageControls() {
+    const context = getContext();
+    if (!context?.chat) return;
+
+    context.chat.forEach((_, index) => {
+        refreshAutopicMessageControls(index, [100, 300, 700]);
+    });
+}
+
+function scheduleInlineGalleryControlRefresh(mesId, delays = [80, 250, 600, 1000]) {
+    const numericMesId = Number(mesId);
+    if (!Number.isInteger(numericMesId)) return;
+
+    delays.forEach(delay => setTimeout(() => {
+        addRerollButtonToMessage(numericMesId);
+        removeMobileToggleFromMessage(numericMesId);
+    }, delay));
 }
 
 function addRerollButtonToMessage(mesId) {
@@ -2579,15 +2848,23 @@ function addRerollButtonToMessage(mesId) {
                 $this.append(rerollBtn);
             }
         }
-    });
-}
-function addMobileToggleToMessage(mesId) {
-    const $message = $(`.mes[mesid="${mesId}"]`);
-    $message.find('.mes_media_container').each(function () {
-        if (!$(this).find('.mobile-ui-toggle').length) {
-            $(this).append(`<div class="mobile-ui-toggle">⚙</div>`);
+        if (!$this.find('.image-seed-save-button').length) {
+            const seedBtn = `<div title="Save current image seed to AutoPic" class="right_menu_button fa-solid fa-seedling image-seed-save-button interactable" role="button" tabindex="0"></div>`;
+            const rerollBtn = $this.find('.image-reroll-button');
+            const deleteBtn = $this.find('.mes_media_delete');
+            if (rerollBtn.length) {
+                $(seedBtn).insertAfter(rerollBtn);
+            } else if (deleteBtn.length) {
+                $(seedBtn).insertBefore(deleteBtn);
+            } else {
+                $this.append(seedBtn);
+            }
         }
     });
+}
+function removeMobileToggleFromMessage(mesId) {
+    const $message = $(`.mes[mesid="${mesId}"]`);
+    $message.find('.mobile-ui-toggle').remove();
 }
 
 /**
@@ -2599,6 +2876,8 @@ function attachSwipeRerollListeners(mesId) {
     const $swipeControls = $message.find('.mes_img_swipe_left, .mes_img_swipe_right, .mes_img_swipe_counter');
     
     $swipeControls.off('click.autopic').on('click.autopic', function (e) {
+        scheduleInlineGalleryControlRefresh(mesId);
+
         const $counter = $message.find('.mes_img_swipe_counter');
         const counterText = $counter.text().trim(); // 예: "1/1" 또는 "2/3"
         
@@ -2760,6 +3039,11 @@ async function handleManualGenerate(mesId) {
 
         updateMessageBlock(numericMesId, message);
         appendMediaToMessage(message, $(`.mes[mesid="${numericMesId}"]`));
+        if (currentInsertType !== INSERT_TYPE.REPLACE) {
+            observeAutopicMessageControls(numericMesId);
+            addRerollButtonToMessage(numericMesId);
+            scheduleInlineGalleryControlRefresh(numericMesId, [0, 50, 150, 350]);
+        }
         await context.saveChat();
         await eventSource.emit(event_types.MESSAGE_UPDATED, numericMesId);
         await eventSource.emit(event_types.MESSAGE_RENDERED, numericMesId);
@@ -3084,6 +3368,9 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
                 
                 if (typeof resultUrl === 'string' && !resultUrl.startsWith('Error')) {
                     const currentInsertType = extension_settings[extensionName].insertType;
+                    const scrollState = currentInsertType === INSERT_TYPE.REPLACE
+                        ? captureMessageScrollState(mesId)
+                        : null;
 
 
                     if (currentInsertType === INSERT_TYPE.REPLACE) {
@@ -3142,13 +3429,22 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
                     }
 
                     updateMessageBlock(mesId, message);
+                    if (currentInsertType === INSERT_TYPE.REPLACE) {
+                        scheduleMessageScrollRestore(scrollState);
+                    }
                     if (currentInsertType !== INSERT_TYPE.REPLACE) {
                         appendMediaToMessage(message, $(`.mes[mesid="${mesId}"]`));
+                        observeAutopicMessageControls(mesId);
+                        addRerollButtonToMessage(mesId);
+                        scheduleInlineGalleryControlRefresh(mesId, [0, 50, 150, 350]);
                     }
                     await context.saveChat();
                     
                     await eventSource.emit(event_types.MESSAGE_UPDATED, mesId);
                     await eventSource.emit(event_types.MESSAGE_RENDERED, mesId);
+                    if (currentInsertType === INSERT_TYPE.REPLACE) {
+                        scheduleMessageScrollRestore(scrollState);
+                    }
                     
                     toastr.success("이미지가 교체되었습니다.");
                 } else {
@@ -3415,11 +3711,13 @@ async function attachTagControls(mesId) {
             
             const $controls = $('<div class="autopic-tag-controls"></div>');
             const $btn = $('<div class="autopic-control-btn reroll-trigger fa-solid fa-rotate interactable" title="Generate Another Image" role="button" tabindex="0"></div>');
+            const $seedBtn = $('<div class="autopic-control-btn autopic-save-seed-trigger fa-solid fa-seedling interactable" title="Save current image seed to AutoPic" role="button" tabindex="0"></div>');
             $btn.attr('data-mesid', mesId);
             $btn.attr('data-prompt', title);
             $btn.attr('data-autopic-id', autopicId);
             $btn.attr('data-image-src', src);
-            $controls.append($btn);
+            $seedBtn.attr('data-image-src', src);
+            $controls.append($btn, $seedBtn);
             $img.after($controls);
         }
     });
@@ -3440,22 +3738,19 @@ const initializeAllTagControls = () => {
 };
 
 eventSource.on(event_types.CHAT_COMPLETED, () => {
-    initializeAllTagControls();
-    initializeAllManualButtons();
+    initializeAllAutopicMessageControls();
 });
 
 eventSource.on(event_types.CHARACTER_SELECTED, () => {
     renderCharacterLinkUI();
     renderCharacterPrompts();
-    initializeAllTagControls();
-    initializeAllManualButtons();
+    initializeAllAutopicMessageControls();
 });
 
 eventSource.on(event_types.CHAT_CHANGED, () => {
     renderCharacterLinkUI();
     renderCharacterPrompts();
-    initializeAllTagControls();
-    initializeAllManualButtons();
+    initializeAllAutopicMessageControls();
 });
 
 $(document).off('click', '.reroll-trigger').on('click', '.reroll-trigger', function(e) {

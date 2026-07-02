@@ -110,6 +110,12 @@
 				</div>
 				<!-- cfg_rescale (플러그인 켤 때만 활성) -->
 				<div id="nai_plugin_options" style="opacity:0.4; pointer-events:none;">
+                    <div class="nai-param-nav-container">
+                        <div class="nai-param-nav-item active" data-nai-tab="nai-tab-basic">기본</div>
+                        <div class="nai-param-nav-item" data-nai-tab="nai-tab-character">캐릭터</div>
+                        <div class="nai-param-nav-item" data-nai-tab="nai-tab-reference">레퍼런스</div>
+                    </div>
+                    <div id="nai-tab-basic" class="nai-param-tab-content active">
 					<div>
 						<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
 							<label style="font-size:0.85rem; font-weight:bold;">
@@ -125,6 +131,25 @@
 						</p>
 					</div>
                     <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--ap-border);">
+                        <label class="gen-checkbox-label" for="nai_seed_enabled">
+                            <input type="checkbox" id="nai_seed_enabled">
+                            <span>
+                                등록된 Seed 사용
+                                <small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
+                                    켜면 아래 Seed 값을 NovelAI 생성/리롤 요청에 고정 적용합니다. 이미지 갤러리의 Seed 버튼으로 현재 이미지 Seed를 등록할 수 있습니다.
+                                </small>
+                            </span>
+                        </label>
+                        <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
+                            <input id="nai_seed_value" class="gen-custom-input" type="number" min="0" step="1" placeholder="Seed 직접 입력" style="flex:1; min-width:0;">
+                            <button id="nai_seed_clear_btn" class="gen-btn gen-btn-gray" title="Seed 비우기" type="button">
+                                <i class="fa-solid fa-eraser"></i>
+                            </button>
+                        </div>
+                    </div>
+                    </div>
+                    <div id="nai-tab-character" class="nai-param-tab-content">
+                    <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--ap-border);">
                         <label class="gen-checkbox-label" for="nai_character_positions_ai_choice">
                             <input type="checkbox" id="nai_character_positions_ai_choice">
                             <span>
@@ -135,6 +160,11 @@
                             </span>
                         </label>
                     </div>
+					<p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-top: 10px; line-height: 1.5;">
+						※ 캐릭터 외형 프롬프트 탭에서 등록된 Character Prompt 및 UC도 플러그인이 켜져 있을 때만 NAI에 전송됩니다.
+					</p>
+                    </div>
+                    <div id="nai-tab-reference" class="nai-param-tab-content">
                     <!-- ★ Vibe Transfer -->
                     <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--ap-border);">
                         <label class="gen-checkbox-label" for="nai_vibe_enabled">
@@ -203,9 +233,7 @@
                             </div>
                         </div>
                     </div>
-					<p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-top: 10px; line-height: 1.5;">
-						※ 캐릭터 외형 프롬프트 탭에서 등록된 Character Prompt 및 UC도 플러그인이 켜져 있을 때만 NAI에 전송됩니다.
-					</p>
+                    </div>
 				</div>
 			</div>
 		</div>
@@ -431,6 +459,47 @@
 
 #autopic_settings_container .image-gen-nav-item:hover { background-color: var(--ap-border); color: var(--ap-text); }
 #autopic_settings_container .image-gen-nav-item.active { background-color: var(--ap-accent); color: #ffffff; }
+
+#autopic_settings_container .nai-param-nav-container {
+    display: flex;
+    gap: 5px;
+    margin-bottom: 16px;
+    padding-bottom: 5px;
+    border-bottom: 1px solid var(--ap-border);
+}
+
+#autopic_settings_container .nai-param-nav-item {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 6px;
+    cursor: pointer;
+    text-align: center;
+    color: var(--ap-text-vague);
+    background-color: var(--ap-bg-card);
+    border-radius: 8px 8px 0 0;
+    font-size: 0.78rem;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+
+#autopic_settings_container .nai-param-nav-item:hover {
+    background-color: var(--ap-border);
+    color: var(--ap-text);
+}
+
+#autopic_settings_container .nai-param-nav-item.active {
+    background-color: var(--ap-accent);
+    color: #ffffff;
+}
+
+#autopic_settings_container .nai-param-tab-content {
+    display: none;
+}
+
+#autopic_settings_container .nai-param-tab-content.active {
+    display: block;
+    animation: fadeInGen 0.2s ease-out;
+}
 
 #autopic_settings_container .image-gen-card {
     background-color: var(--ap-bg-card); padding: 22px; border-radius: 12px;
