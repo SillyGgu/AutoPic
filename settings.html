@@ -40,6 +40,21 @@
                 </div>
             </div>
 
+            <div class="image-gen-card autopic-translation-card">
+                <label for="autopic_translation_compatibility" class="gen-section-title">번역기 호환</label>
+                <select id="autopic_translation_compatibility" class="gen-custom-input">
+                    <option value="off">사용 안 함</option>
+                    <option value="slots">고정 이미지 슬롯</option>
+                </select>
+                <small id="autopic_translation_detected"></small>
+                <div id="autopic_translation_details" hidden>
+                    <p>번역 후에도 이미지가 글 사이의 원래 위치에 남습니다. 이미지를 다시 생성해도 번역문은 그대로 유지합니다. 이 옵션을 켠 뒤 태그 치환 모드로 만든 이미지부터 적용됩니다.</p>
+                    <p>llm-translator-custom에는 이미지 위치 표시를 건드리지 않도록 하는 규칙을 자동으로 넣습니다. 다른 번역기의 동작은 보장하지 않습니다. AutoPic이 없는 환경에서는 그림 대신 [AutoPic 이미지]라는 안내만 보일 수 있습니다.</p>
+                    <button id="autopic_convert_slots" type="button" class="menu_button"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> 예전 방식의 이미지를 번역용으로 바꾸기</button>
+                    <small>예전에 태그 치환 모드로 글 사이에 넣은 이미지에만 사용하세요. 이미 번역용으로 만든 이미지, 메시지에 따로 삽입한 이미지, 일반 첨부 이미지는 바꾸지 않습니다. 실행 전에 개수와 영향을 안내합니다.</small>
+                </div>
+            </div>
+
             <div class="image-gen-card">
                 <h3 class="gen-section-title">고급 인젝션 설정</h3>
                 <div class="flex-container flexnowrap margin-bottom-15" style="align-items: center; gap: 20px;">
@@ -78,7 +93,7 @@
                 <div class="flex-container flexnowrap margin-bottom-15" style="align-items: center; gap: 20px;">
                     <label for="autopic_manual_profile" style="flex-shrink: 0; min-width: 120px;">연결 프로필</label>
                     <select id="autopic_manual_profile" class="gen-custom-input flex1">
-                        <option value="">연결 프로필 선택</option>
+                        <option value="">현재 사용 중인 연결 · ST 설정 사용</option>
                     </select>
                 </div>
                 <div class="flex-container flexnowrap" style="align-items: center; gap: 20px;">
@@ -86,157 +101,157 @@
                     <input id="autopic_manual_max_tokens" class="gen-custom-input" type="number" min="128" max="4096" step="1" style="width: 100px;">
                 </div>
                 <p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-top: 10px; line-height: 1.5;">
-                    버튼을 누르면 선택한 Connection Profile이 해당 메시지용 AutoPic 구조화 블록을 만들고, 자동 생성과 같은 이미지 생성 경로로 전송합니다.
+                    ‘현재 사용 중인 연결’은 ST의 현재 API·모델과 Quiet 생성에 적용되는 채팅 프리셋·컨텍스트를 사용합니다. 별도 Connection Profile도 선택할 수 있습니다. 최대 토큰은 위 설정을 사용하며, 완성된 태그는 기존 이미지 생성 경로로 전송합니다.
                 </p>
             </div>
 
-			<div class="image-gen-card" id="nai-params-card">
-				<h3 class="gen-section-title">🎛️ NovelAI 고급 파라미터</h3>
-				<p style="font-size: 0.8rem; color: var(--ap-text-vague); margin-bottom: 15px; line-height: 1.4;">
-					ST의 이미지 생성 소스가 <b>NovelAI</b>일 때만 동작합니다. Character Prompt, UC, cfg_rescale 등 ST 기본 확장이 미지원하는 NAI v4 전용 기능을 제공합니다.<br>
-					<span style="color: #e07b7b;">⚠️ 아래 기능들은 모두 AutoPic <b>서버 플러그인</b> 설치가 필요합니다. 플러그인 없이 사용하면 이미지 생성이 실패할 수 있습니다.</span>
-				</p>
-				<!-- 서버 플러그인 기능 전체 토글 -->
-				<div style="margin-bottom: 18px; padding: 12px; background: var(--ap-bg-input); border-radius: 8px; border: 1px solid var(--ap-border);">
-					<label class="gen-checkbox-label" for="nai_use_server_plugin">
-						<input type="checkbox" id="nai_use_server_plugin">
-						<span>
-							NAI 서버 플러그인 기능 사용
-							<small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
-								끄면 cfg_rescale, Character Prompt, Character UC를 모두 비활성화합니다. 플러그인 미설치(레거시) 사용자는 반드시 꺼주세요.
-							</small>
-						</span>
-					</label>
-				</div>
-				<!-- cfg_rescale (플러그인 켤 때만 활성) -->
-				<div id="nai_plugin_options" style="opacity:0.4; pointer-events:none;">
-                    <div class="nai-param-nav-container">
-                        <div class="nai-param-nav-item active" data-nai-tab="nai-tab-basic">기본</div>
-                        <div class="nai-param-nav-item" data-nai-tab="nai-tab-character">캐릭터</div>
-                        <div class="nai-param-nav-item" data-nai-tab="nai-tab-reference">레퍼런스</div>
-                    </div>
-                    <div id="nai-tab-basic" class="nai-param-tab-content active">
-					<div>
-						<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
-							<label style="font-size:0.85rem; font-weight:bold;">
-								Prompt Guidance Rescale
-							</label>
-							<span id="nai_cfg_rescale_display" style="font-size:0.9rem; font-weight:bold; color: var(--ap-accent); min-width:32px; text-align:right;">0.00</span>
-						</div>
-						<input type="range" id="nai_cfg_rescale" class="neo-range-slider"
-							min="0" max="1" step="0.01" value="0"
-							style="width:100%; accent-color: var(--ap-accent);">
-						<p style="font-size: 0.75rem; color: var(--ap-text-vague); margin-top: 5px; line-height: 1.4;">
-							CFG Scale이 높을 때 색상 과포화를 방지합니다. <b>0 = 비활성</b>, CFG 7~10이면 0.3~0.5 권장.
-						</p>
-					</div>
-                    <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--ap-border);">
-                        <label class="gen-checkbox-label" for="nai_seed_enabled">
-                            <input type="checkbox" id="nai_seed_enabled">
-                            <span>
-                                등록된 Seed 사용
-                                <small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
-                                    켜면 아래 Seed 값을 NovelAI 생성/리롤 요청에 고정 적용합니다. 이미지 갤러리의 Seed 버튼으로 현재 이미지 Seed를 등록할 수 있습니다.
-                                </small>
-                            </span>
-                        </label>
-                        <div style="display:flex; gap:8px; align-items:center; margin-top:10px;">
-                            <input id="nai_seed_value" class="gen-custom-input" type="number" min="0" step="1" placeholder="Seed 직접 입력" style="flex:1; min-width:0;">
-                            <button id="nai_seed_clear_btn" class="gen-btn gen-btn-gray" title="Seed 비우기" type="button">
-                                <i class="fa-solid fa-eraser"></i>
-                            </button>
-                        </div>
-                    </div>
-                    </div>
-                    <div id="nai-tab-character" class="nai-param-tab-content">
-                    <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--ap-border);">
-                        <label class="gen-checkbox-label" for="nai_character_positions_ai_choice">
-                            <input type="checkbox" id="nai_character_positions_ai_choice">
-                            <span>
-                                Character Positions (Global) AI's choice
-                                <small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
-                                    켜면 NAI가 캐릭터 위치를 직접 선택합니다. 끄면 AutoPic이 캐릭터 프롬프트 좌표를 전송합니다.
-                                </small>
-                            </span>
-                        </label>
-                    </div>
-					<p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-top: 10px; line-height: 1.5;">
-						※ 캐릭터 외형 프롬프트 탭에서 등록된 Character Prompt 및 UC도 플러그인이 켜져 있을 때만 NAI에 전송됩니다.
-					</p>
-                    </div>
-                    <div id="nai-tab-reference" class="nai-param-tab-content">
-                    <!-- ★ Vibe Transfer -->
-                    <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--ap-border);">
-                        <label class="gen-checkbox-label" for="nai_vibe_enabled">
-                            <input type="checkbox" id="nai_vibe_enabled">
-                            <span>
-                                Vibe Transfer 사용
-                                <small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
-                                    레퍼런스 이미지의 스타일/분위기를 생성에 반영합니다. 이미지를 최대 여러 장 등록할 수 있습니다.
-                                </small>
-                            </span>
-                        </label>
-                        <div id="nai_vibe_options" style="margin-top:12px; opacity:0.4; pointer-events:none;">
-                            <div id="nai_vibe_list" style="display:flex; flex-direction:column; gap:10px; margin-bottom:10px;"></div>
-                            <button id="nai_vibe_add_btn" class="gen-btn gen-btn-dark" style="width:100%; justify-content:center;">
-                                <i class="fa-solid fa-plus"></i> 이미지 추가
-                            </button>
-                        </div>
-                    </div>
-                    <!-- ★ 레퍼런스 이미지 (Precise / Director Reference) -->
-                    <div style="margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--ap-border);">
-                        <label class="gen-checkbox-label" for="nai_ref_enabled">
-                            <input type="checkbox" id="nai_ref_enabled">
-                            <span>
-                                레퍼런스 이미지 (Reference)
-                                <small style="display:block; font-size:0.75rem; color:var(--ap-text-vague); font-weight:normal; margin-top:2px;">
-                                    참조 이미지의 캐릭터/스타일을 생성에 반영합니다. 인코딩이 없어 추가 Anlas가 들지 않습니다. Vibe Transfer와 동시에 사용할 수 없습니다.
-                                </small>
-                            </span>
-                        </label>
-                        <div id="nai_ref_options" style="margin-top:12px; opacity:0.4; pointer-events:none;">
-                            <div id="nai_ref_preview" style="display:flex; gap:10px; align-items:flex-start; background:var(--ap-bg-item); padding:10px; border-radius:8px; border:1px solid var(--ap-border); margin-bottom:10px;"></div>
-                            <button id="nai_ref_add_btn" class="gen-btn gen-btn-dark" style="width:100%; justify-content:center;">
-                                <i class="fa-solid fa-plus"></i> 레퍼런스 이미지 선택
-                            </button>
-                            <div style="margin-top:12px;">
-                                <span style="font-size:0.78rem; color:var(--ap-text-vague); display:block; margin-bottom:4px;">참조 종류</span>
-                                <select id="nai_ref_mode" class="gen-custom-input" style="width:100%;">
-                                    <option value="character&style">Character &amp; Style</option>
-                                    <option value="character">Character</option>
-                                    <option value="style">Style</option>
-                                </select>
-                            </div>
-                            <div style="margin-top:12px;">
-                                <div style="display:flex; justify-content:space-between;">
-                                    <span style="font-size:0.78rem; color:var(--ap-text-vague);">Strength</span>
-                                    <span id="nai_ref_strength_display" style="font-size:0.78rem; font-weight:bold; color:var(--ap-accent);">1.00</span>
-                                </div>
-                                <input type="range" id="nai_ref_strength" class="neo-range-slider"
-                                    min="0.0" max="1.0" step="0.01" value="1.0"
-                                    style="width:100%; accent-color: var(--ap-accent);">
-                                <p style="font-size: 0.72rem; color: var(--ap-text-vague); margin-top: 4px; line-height: 1.4;">
-                                    값이 높을수록 참조 이미지의 영향(포즈·구도·색)이 강해집니다. (기본 1.00)
-                                </p>
-                            </div>
-                            <div style="margin-top:8px;">
-                                <div style="display:flex; justify-content:space-between;">
-                                    <span style="font-size:0.78rem; color:var(--ap-text-vague);">Fidelity</span>
-                                    <span id="nai_ref_fidelity_display" style="font-size:0.78rem; font-weight:bold; color:var(--ap-accent);">1.00</span>
-                                </div>
-                                <input type="range" id="nai_ref_fidelity" class="neo-range-slider"
-                                    min="0.0" max="1.0" step="0.01" value="1.0"
-                                    style="width:100%; accent-color: var(--ap-accent);">
-                                <p style="font-size: 0.72rem; color: var(--ap-text-vague); margin-top: 4px; line-height: 1.4;">
-                                    1에 가까울수록 캐릭터의 세부 디테일을 더 정확히 살립니다. 0이면 스타일·구도에 더 유연합니다. (기본 1.00)
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-                    </div>
-				</div>
-			</div>
-		</div>
+			<div class="image-gen-card ap-studio" id="nai-params-card">
+    <header class="ap-studio-header">
+        <div class="ap-heading-icon"><i class="fa-solid fa-sliders" aria-hidden="true"></i></div>
+        <div><span class="ap-eyebrow">NOVELAI STUDIO</span><h3>이미지 생성 설정</h3></div>
+        <span id="nai_model_badge" class="ap-badge">ST</span>
+    </header>
+    <div class="ap-model-field">
+        <label for="nai_generation_mode">생성 방식</label>
+        <select id="nai_generation_mode" class="gen-custom-input">
+            <option value="legacy">ST Image Generation · 기존 방식</option>
+            <option value="nai-diffusion-4-5-full">AutoPic · V4.5 Full</option>
+            <option value="nai-diffusion-5-full">AutoPic · V5 Full</option>
+        </select>
+    </div>
+    <div id="nai_direct_options" hidden>
+        <section class="ap-style-presets" aria-label="그림체 프리셋">
+            <label class="ap-field" for="nai_style_select"><span><i class="fa-solid fa-palette" aria-hidden="true"></i> 그림체 프리셋</span></label>
+            <div class="ap-preset-row">
+                <select id="nai_style_select" class="gen-custom-input" aria-label="저장된 그림체"><option value="">그림체 선택…</option></select>
+                <button id="nai_style_update" type="button" class="ap-icon-button" title="현재 설정으로 갱신" aria-label="그림체 갱신" disabled><i class="fa-solid fa-rotate" aria-hidden="true"></i></button>
+                <button id="nai_style_delete" type="button" class="ap-icon-button" title="그림체 삭제" aria-label="그림체 삭제" disabled><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>
+            </div>
+            <div class="ap-preset-row">
+                <input id="nai_style_name" class="gen-custom-input" maxlength="48" placeholder="새 그림체 이름" aria-label="그림체 이름">
+                <button id="nai_style_save" type="button" class="ap-icon-button" title="현재 설정을 새 그림체로 저장" aria-label="새 그림체 저장"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+            </div>
+            <p class="ap-help">모델별 생성 설정 · 그림체/UC 프롬프트 저장. Seed, 캐릭터, 참조 이미지는 현재 설정을 유지합니다.</p>
+            <p id="nai_style_status" class="ap-import-status" role="status" hidden></p>
+        </section>
+        <div class="ap-import-bar" id="nai_metadata_dropzone">
+            <div class="ap-import-copy"><i class="fa-regular fa-image" aria-hidden="true"></i><div><strong>이미지에서 설정 가져오기</strong><small>원본 파일을 놓거나 선택하세요 · PNG / WebP / JPEG</small></div></div>
+            <button type="button" id="nai_metadata_pick" class="ap-icon-button" title="이미지 파일 선택" aria-label="이미지 파일 선택"><i class="fa-solid fa-file-import" aria-hidden="true"></i></button>
+            <input type="file" id="nai_metadata_file" accept="image/png,image/webp,image/jpeg,.png,.webp,.jpg,.jpeg" hidden>
+        </div>
+        <p id="nai_metadata_status" class="ap-import-status" role="status" aria-live="polite" hidden></p>
+        <section id="nai_metadata_preview" class="ap-import-preview" hidden aria-label="가져올 설정 미리보기">
+            <div class="ap-section-heading"><div><i class="fa-solid fa-file-circle-check" aria-hidden="true"></i><h4>불러올 설정</h4></div><button type="button" id="nai_metadata_close" class="ap-icon-button ap-small" title="가져오기 닫기" aria-label="가져오기 닫기"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
+            <p id="nai_metadata_filename" class="ap-file-name"></p>
+            <div id="nai_metadata_summary" class="ap-meta-summary"></div>
+            <p class="ap-help">켜진 항목만 가져옵니다. 메인·UC·캐릭터는 기본 제외이며, 끈 항목은 현재 설정을 유지합니다.</p>
+            <div class="ap-import-choices">
+                <label class="ap-switch-row"><span><strong>생성값</strong><small>크기·샘플링·색감 / 현재 참조 기능 끄기</small></span><input type="checkbox" id="nai_import_generation" class="ap-toggle" role="switch" checked></label>
+                <label class="ap-switch-row"><span><strong>고정 Seed</strong><small>이미지에 기록된 시드</small></span><input type="checkbox" id="nai_import_seed" class="ap-toggle" role="switch" checked></label>
+                <label class="ap-switch-row"><span><strong>메인 프롬프트</strong><small>공통 그림체 교체 · 저장 전 편집 내용도 교체</small></span><input type="checkbox" id="nai_import_prompts" class="ap-toggle" role="switch"></label>
+                <label class="ap-switch-row"><span><strong>UC 프롬프트</strong><small>제외 요소 교체 · 메인과 별도로 선택</small></span><input type="checkbox" id="nai_import_uc" class="ap-toggle" role="switch"></label>
+                <label class="ap-switch-row"><span><strong>캐릭터·위치</strong><small>현재 모델에 저장 / 채팅 캐릭터 대신 사용</small></span><input type="checkbox" id="nai_import_characters" class="ap-toggle" role="switch"></label>
+            </div>
+            <details class="ap-meta-detail"><summary>프롬프트 미리보기</summary><pre id="nai_metadata_prompt"></pre></details>
+            <ul id="nai_metadata_warnings" class="ap-notices"></ul>
+            <div class="ap-action-row"><span>선택한 항목만 변경됩니다</span><button type="button" id="nai_metadata_apply" class="gen-btn gen-btn-blue"><i class="fa-solid fa-check" aria-hidden="true"></i>설정 적용</button></div>
+        </section>
+        <p id="nai_direct_status" class="ap-capability-line" role="status"></p>
+        <section class="ap-panel">
+            <div class="ap-section-heading"><div><i class="fa-solid fa-expand" aria-hidden="true"></i><h4>캔버스</h4></div><span id="nai_resolution_label" class="ap-value-label">832 × 1216</span></div>
+            <div class="ap-aspect-picker" role="group" aria-label="해상도 프리셋">
+                <button type="button" data-resolution="square" aria-pressed="false" title="정사각형 · 1024 × 1024"><i class="fa-regular fa-square" aria-hidden="true"></i><strong>정사각형</strong><small>1024 × 1024</small></button>
+                <button type="button" data-resolution="landscape" aria-pressed="false" title="가로 · 1216 × 832"><i class="fa-regular fa-image" aria-hidden="true"></i><strong>가로</strong><small>1216 × 832</small></button>
+                <button type="button" data-resolution="portrait" aria-pressed="true" title="세로 · 832 × 1216"><i class="fa-solid fa-image-portrait" aria-hidden="true"></i><strong>세로</strong><small>832 × 1216</small></button>
+            </div>
+            <details id="nai_custom_resolution" class="ap-custom-resolution"><summary><i class="fa-solid fa-ruler-combined" aria-hidden="true"></i>직접 입력</summary>
+                <div class="ap-size-fields"><label class="ap-field">너비<input class="gen-custom-input" data-direct="width" type="number" min="64" max="2048" step="64"></label><button type="button" id="nai_swap_size" class="ap-icon-button" title="너비와 높이 바꾸기" aria-label="너비와 높이 바꾸기"><i class="fa-solid fa-right-left" aria-hidden="true"></i></button><label class="ap-field">높이<input class="gen-custom-input" data-direct="height" type="number" min="64" max="2048" step="64"></label></div>
+                <p class="ap-help">64px 단위 · 한 변 최대 2048px</p>
+            </details>
+        </section>
+        <section class="ap-panel">
+            <div class="ap-section-heading"><div><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><h4>생성</h4></div><span class="ap-section-hint">디테일과 프롬프트 반영</span></div>
+            <div class="ap-field-grid">
+                <label class="ap-field">Steps<input class="gen-custom-input" data-direct="steps" type="number" min="1" max="50" step="1"><small>이미지를 다듬는 횟수</small></label>
+                <label class="ap-field">Guidance<input class="gen-custom-input" data-direct="scale" type="number" min="0" max="10" step="0.1"><small>프롬프트 반영 강도</small></label>
+                <label class="ap-field">Sampler<select class="gen-custom-input" data-direct="sampler"></select></label>
+                <label class="ap-field">Noise schedule<select class="gen-custom-input" data-direct="scheduler"></select></label>
+            </div>
+            <div class="ap-feature-row" data-feature="transparency"><label class="ap-switch-row"><span><strong><i class="fa-solid fa-chess-board" aria-hidden="true"></i>투명 배경</strong><small>알파 채널이 있는 PNG로 생성</small></span><input class="ap-toggle" data-direct="transparent" type="checkbox" role="switch"></label></div>
+            <div class="ap-feature-row" data-feature="variety"><label class="ap-switch-row"><span><strong><i class="fa-solid fa-shuffle" aria-hidden="true"></i>Variety Boost</strong><small>구도와 표현의 다양성</small></span><input class="ap-toggle" data-direct="variety" type="checkbox" role="switch"></label></div>
+        </section>
+        <details class="ap-panel ap-foldout">
+            <summary><i class="fa-solid fa-pen-nib" aria-hidden="true"></i><span>프롬프트 &amp; 스타일<small>품질 태그, 공통 그림체와 UC</small></span><i class="fa-solid fa-chevron-down ap-chevron" aria-hidden="true"></i></summary>
+            <div class="ap-foldout-body">
+                <div class="ap-field-grid"><label class="ap-field">Quality tags<select class="gen-custom-input" data-direct="quality"></select></label><label class="ap-field">UC preset<select class="gen-custom-input" data-direct="ucPreset"><option value="heavy">Heavy</option><option value="light">Light</option><option value="humanFocus">Human focus</option><option value="furryFocus">Furry focus</option><option value="none">없음</option></select></label></div>
+                <label class="ap-field">Dataset<select class="gen-custom-input" data-direct="dataset"><option value="anime">Anime</option><option value="furry">Furry</option><option value="background">Background</option></select></label>
+                <div class="ap-field">
+                    <div class="ap-prompt-heading"><label for="nai_main_prompt">메인 · 그림체 프롬프트</label><button type="button" class="ap-icon-button" data-save-prompt="prefix" title="메인 프롬프트 저장" aria-label="메인 프롬프트 저장" disabled><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i></button></div>
+                    <textarea id="nai_main_prompt" class="gen-custom-input" data-direct="prefix" rows="3" placeholder="그림체, 조명 등 모든 장면에 적용할 프롬프트" aria-describedby="nai_main_prompt_status"></textarea>
+                    <small id="nai_main_prompt_status" data-prompt-status="prefix" role="status">저장된 내용</small>
+                </div>
+                <div class="ap-field">
+                    <div class="ap-prompt-heading"><label for="nai_uc_prompt">추가 UC</label><button type="button" class="ap-icon-button" data-save-prompt="negative_prompt" title="UC 프롬프트 저장" aria-label="UC 프롬프트 저장" disabled><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i></button></div>
+                    <textarea id="nai_uc_prompt" class="gen-custom-input" data-direct="negative_prompt" rows="2" placeholder="제외할 요소" aria-describedby="nai_uc_prompt_status"></textarea>
+                    <small id="nai_uc_prompt_status" data-prompt-status="negative_prompt" role="status">저장된 내용</small>
+                </div>
+                <p class="ap-help">각 저장 아이콘을 눌러야 생성·프리셋에 반영됩니다. 미저장 편집은 모델 전환 시 유지되며 페이지를 새로 고치면 사라집니다. 프리셋 적용은 저장된 그림체로 교체합니다.</p>
+                <div id="nai_imported_characters" class="ap-imported-characters" hidden>
+                    <label class="ap-switch-row"><span><strong>가져온 캐릭터 사용</strong><small>켜면 채팅에서 구성한 캐릭터 대신 사용합니다.</small></span><input class="ap-toggle" data-direct="useImportedCharacters" type="checkbox" role="switch"></label>
+                    <div id="nai_imported_character_list"></div>
+                    <button type="button" id="nai_clear_imported_characters" class="ap-icon-button" title="가져온 캐릭터 삭제" aria-label="가져온 캐릭터 삭제"><i class="fa-solid fa-trash-can" aria-hidden="true"></i></button>
+                </div>
+            </div>
+        </details>
+    </div>
+    <div class="ap-legacy-options">
+        <p class="ap-help">ST의 이미지 생성 설정을 사용합니다. 아래 추가 기능은 NovelAI 소스와 AutoPic 서버 플러그인이 필요합니다.</p>
+        <label class="ap-switch-row"><span><strong>서버 플러그인 기능</strong><small>Rescale, 캐릭터 UC와 참조 이미지</small></span><input type="checkbox" id="nai_use_server_plugin" class="ap-toggle" role="switch"></label>
+    </div>
+    <div id="nai_plugin_options" class="ap-shared-options">
+        <div class="ap-section-heading"><div><i class="fa-solid fa-sliders" aria-hidden="true"></i><h4>세부 조정</h4></div></div>
+        <div class="nai-param-nav-container">
+            <button type="button" class="nai-param-nav-item active" data-nai-tab="nai-tab-basic"><i class="fa-solid fa-sliders" aria-hidden="true"></i>색감·Seed</button>
+            <button type="button" class="nai-param-nav-item" data-nai-tab="nai-tab-character"><i class="fa-solid fa-user-group" aria-hidden="true"></i>캐릭터</button>
+            <button type="button" class="nai-param-nav-item" data-nai-tab="nai-tab-reference"><i class="fa-regular fa-images" aria-hidden="true"></i>참조 이미지</button>
+        </div>
+        <div id="nai-tab-basic" class="nai-param-tab-content active">
+            <div class="ap-slider-heading"><label for="nai_cfg_rescale">Guidance Rescale</label><output id="nai_cfg_rescale_display">0.00</output></div>
+            <input type="range" id="nai_cfg_rescale" class="neo-range-slider ap-range" min="0" max="1" step="0.01" value="0">
+            <p class="ap-help">높은 Guidance에서 색이 과해지는 현상을 줄입니다. 0은 비활성화입니다.</p>
+            <div class="ap-divider"></div>
+            <label class="ap-switch-row" for="nai_seed_enabled"><span><strong>Seed 고정</strong><small>같은 시작값으로 생성·리롤</small></span><input type="checkbox" id="nai_seed_enabled" class="ap-toggle" role="switch"></label>
+            <div class="ap-seed-field"><i class="fa-solid fa-seedling" aria-hidden="true"></i><input id="nai_seed_value" class="gen-custom-input" type="number" min="0" max="4294967295" step="1" placeholder="랜덤 Seed" aria-label="Seed"><button type="button" id="nai_seed_clear_btn" class="ap-icon-button" title="Seed 초기화" aria-label="Seed 초기화"><i class="fa-solid fa-rotate-left" aria-hidden="true"></i></button></div>
+        </div>
+        <div id="nai-tab-character" class="nai-param-tab-content">
+            <label class="ap-switch-row" for="nai_character_positions_ai_choice"><span><strong>AI가 위치 선택</strong><small>끄면 등록한 캐릭터의 좌표를 사용합니다.</small></span><input type="checkbox" id="nai_character_positions_ai_choice" class="ap-toggle" role="switch"></label>
+            <p class="ap-help">캐릭터 외형 프롬프트 탭에서 외형·UC·좌표를 관리할 수 있습니다.</p>
+        </div>
+        <div id="nai-tab-reference" class="nai-param-tab-content">
+            <p id="nai_reference_unavailable" class="ap-empty-note" hidden><i class="fa-solid fa-circle-info" aria-hidden="true"></i>V5는 현재 Vibe와 Precise Reference를 지원하지 않습니다. 저장된 V4.5 설정은 유지됩니다.</p>
+            <div id="nai_reference_controls">
+                <label class="ap-switch-row" for="nai_vibe_enabled"><span><strong>Vibe Transfer</strong><small>참조 이미지의 스타일과 분위기</small></span><input type="checkbox" id="nai_vibe_enabled" class="ap-toggle" role="switch"></label>
+                <div id="nai_vibe_options" class="ap-reference-body">
+                    <div id="nai_vibe_list"></div>
+                    <button type="button" id="nai_vibe_add_btn" class="ap-upload-button"><i class="fa-solid fa-plus" aria-hidden="true"></i>Vibe 이미지 추가</button>
+                    <label class="ap-switch-row ap-direct-only"><span><strong>강도 정규화</strong><small>강도 합계가 1을 넘지 않도록 조정</small></span><input class="ap-toggle" data-direct="normalizeVibes" type="checkbox" role="switch"></label>
+                </div>
+                <div class="ap-divider"></div>
+                <label class="ap-switch-row" for="nai_ref_enabled"><span><strong>Precise Reference</strong><small>캐릭터와 스타일을 정밀하게 참조</small></span><input type="checkbox" id="nai_ref_enabled" class="ap-toggle" role="switch"></label>
+                <div id="nai_ref_options" class="ap-reference-body">
+                    <div id="nai_ref_preview"></div>
+                    <button type="button" id="nai_ref_add_btn" class="ap-upload-button"><i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i>참조 이미지 선택</button>
+                    <label class="ap-field">참조 종류<select id="nai_ref_mode" class="gen-custom-input"><option value="character&style">Character &amp; Style</option><option value="character">Character</option><option value="style">Style</option></select></label>
+                    <div class="ap-slider-heading"><label for="nai_ref_strength">Strength</label><output id="nai_ref_strength_display">1.00</output></div><input type="range" id="nai_ref_strength" class="neo-range-slider ap-range" min="0" max="1" step="0.01" value="1">
+                    <div class="ap-slider-heading"><label for="nai_ref_fidelity">Fidelity</label><output id="nai_ref_fidelity_display">1.00</output></div><input type="range" id="nai_ref_fidelity" class="neo-range-slider ap-range" min="0" max="1" step="0.01" value="1">
+                    <p class="ap-help">참조 1장당 생성마다 5 Anlas 추가 · Vibe와 동시 사용 불가</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <footer class="ap-studio-footer ap-direct-only"><i class="fa-solid fa-circle-info" aria-hidden="true"></i><span>설정은 모델별로 저장됩니다. 직접 생성에는 AutoPic 서버 플러그인이 필요합니다.</span></footer>
+</div>
+</div>
         <div id="tab-gen-templates" class="image-gen-tab-content">
 			<div class="image-gen-card">
 				<h3 class="gen-section-title">템플릿 관리</h3>

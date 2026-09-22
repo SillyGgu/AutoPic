@@ -3,8 +3,9 @@
     "requires": [],
     "optional": [],
     "js": "index.js",
+    "css": "nai-studio.css",
     "author": "SillyGgu",
-    "version": "1.9.0",
+    "version": "2.0.0",
     "homePage": "https://github.com/SillyGgu/AutoPic",
     "auto_update": true
 }

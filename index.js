@@ -1,5 +1,13 @@
+import { STRUCTURED_BLOCKS_PROMPT, STRICT_TAG_BLOCKS_PROMPT } from './prompt-templates.mjs';
+import { requestManualPrompt } from './manual-prompt.mjs';
+import { slotIds, slotRecord, reserveSlot, writeSlot, renderSlots, clearSlotPrompts, pruneSlots, configureSlotProtection, slotSubscription } from './image-slots.mjs';
+import * as ST_MEDIA from '../../../constants.js';
+import { gallerySources, selectedGallerySource, recoverGalleryRecords, syncGalleryMedia } from './gallery.mjs';
+import { parseAutopic } from './structured-prompt.mjs';
+import { imageKey, rememberImage, imageRecord, resolveRecord, migrateImageRecords, pruneImageRecords, clearImageRecords } from './image-records.mjs';
 import { extension_settings, getContext } from '../../../extensions.js';
 import {
+    generateQuietPrompt,
     saveSettingsDebounced,
     eventSource,
     event_types,
@@ -8,7 +16,8 @@ import {
     getRequestHeaders,
 } from '../../../../script.js';
 import { appendMediaToMessage } from '../../../../script.js';
-import { regexFromString } from '../../../utils.js';
+import { regexFromString, saveBase64AsFile } from '../../../utils.js';
+import { isDirect, syncCharacterPositionVisibility, bindDirectSettings, refreshDirectSettings, generateDirect, readMetadataBuffer } from './nai-direct.mjs';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
 import { ConnectionManagerRequestService } from '../../shared.js';
@@ -40,6 +49,7 @@ function getCurrentAutopicCharacterPromptsForNai() {
                 prompt: String(item?.prompt ?? '').trim(),
                 clothing: String(item?.clothing ?? '').trim(),
                 uc: String(item?.uc ?? '').trim(),
+                ...(isDirect(getNaiParams()) && item?.center ? { center: { ...item.center } } : {}),
                 enabled: item?.enabled !== false,
                 source: 'autopic',
                 slot: index + 1,
@@ -53,6 +63,7 @@ function getCurrentAutopicCharacterPromptsForNai() {
 
 function shouldUseAutopicNaiProxy() {
     const nai = getNaiParams();
+    if (isDirect(nai)) return false;
     if (!nai?.useServerPlugin) return !!pendingNaiPayload;
     const seedValue = Number(nai?.seed);
     const seedActive = !!nai?.seedEnabled && Number.isInteger(seedValue) && seedValue >= 0;
@@ -204,6 +215,7 @@ function shouldUseAutopicNaiProxy() {
 
 // ── NAI cfg_rescale 파라미터 ──────────────────────────────────
 const NAI_DEFAULTS = {
+    generationMode: 'legacy',
     cfg_rescale: 0.0,
     useNaiRescale: false,
     useServerPlugin: false,
@@ -332,10 +344,88 @@ function getAttrValue(attrs, name) {
     return match ? decodeHtmlAttribute(match[1]).trim() : '';
 }
 
-function createAutopicImageTag(src, title, idPrefix = 'tag') {
-    const tagId = `${idPrefix}-${Date.now()}`;
-    const titleText = escapeHtmlAttribute(String(title || ''));
-    return `<img src="${escapeHtmlAttribute(src)}" data-autopic-id="${tagId}" title="${titleText}">`;
+function createAutopicImageTag(src, title, idPrefix = 'tag', message) {
+    const tagId = `${idPrefix}-${crypto.randomUUID()}`;
+    if (message) {
+        rememberImage(message, src, title);
+    }
+    return `<img src="${escapeHtmlAttribute(src)}" data-autopic-id="${tagId}" title="AutoPic">`;
+}
+
+function getAutopicImagePrompt(message, image) {
+    if (!image) return '';
+    const slot = slotRecord(message, image.getAttribute('data-autopic-slot'));
+    if (slot) return slot.editText || '';
+    const record = imageRecord(message, image.getAttribute('src'));
+    if (record) return record.editText;
+    const saved = message?.extra?.autopic_image_prompts?.[image.getAttribute('data-autopic-id')];
+    if (typeof saved === 'string') return saved;
+    const title = image.getAttribute('title') || image.getAttribute('alt') || '';
+    return title === 'AutoPic' ? '' : title;
+}
+
+function compactAutopicImageTitles(message) {
+    if (!message?.mes?.includes('data-autopic-id')) return;
+    message.mes = message.mes.replace(/<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, tag => {
+        if (!tag.includes('data-autopic-id')) return tag;
+        const template = document.createElement('template');
+        template.innerHTML = tag;
+        const image = template.content.querySelector('img');
+        const id = image?.getAttribute('data-autopic-id');
+        const title = image?.getAttribute('title');
+        if (!id || !title || title === 'AutoPic') return tag;
+        rememberImage(message, image.getAttribute('src'), title);
+        return tag.replace(/\btitle\s*=\s*("[^"]*"|'[^']*')/i, 'title="AutoPic"');
+    });
+}
+
+// Cleanup runs on explicit edits/generation saves, never on opening the editor.
+function cleanMessageImageRecords(message) {
+    if (!message?.extra) return;
+    pruneSlots(message);
+    recoverGalleryRecords(message);
+    const sources = [], ids = new Set();
+    const extras = [message.extra, ...(message.swipe_info || []).map(s => s?.extra).filter(Boolean)];
+    for (const extra of extras) { sources.push(...gallerySources({extra})); if (extra.image) sources.push(extra.image); }
+    for (const text of [message.mes, ...(message.swipes || [])]) {
+        if (!String(text || '').includes('<img')) continue;
+        const template = document.createElement('template'); template.innerHTML = text;
+        for (const image of template.content.querySelectorAll('img')) {
+            sources.push(image.getAttribute('src') || '');
+            ids.add(image.getAttribute('data-autopic-id'));
+        }
+    }
+    pruneImageRecords(message, sources, ids);
+}
+
+async function manageImageRecords(mesId, remove) {
+    const context = getContext(), message = context.chat?.[mesId];
+    if (!message) return;
+    const originalText = message.mes;
+    if (remove && !await callGenericPopup('이 메시지의 AutoPic 생성 정보를 삭제할까요? 이미지는 유지되지만 기존 프롬프트로 리롤할 수 없게 됩니다.', POPUP_TYPE.CONFIRM)) return;
+    pruneSlots(message);
+    recoverGalleryRecords(message);
+    migrateImageRecords(message);
+    compactAutopicImageTitles(message);
+    if (remove) {
+        clearSlotPrompts(message);
+        clearImageRecords(message);
+        for (const info of message.swipe_info || []) if (info?.extra) clearImageRecords(info);
+        // Remove legacy embedded sources as well so a later read cannot resurrect them.
+        const strip = text => String(text || '').replace(/<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi, tag => tag.includes('data-autopic-id') ? tag.replace(/\btitle\s*=\s*("[^"]*"|'[^']*')/i, 'title="AutoPic"') : tag);
+        message.mes = strip(message.mes);
+        if (message.swipes) message.swipes = message.swipes.map(strip);
+        if (message.extra) delete message.extra.title;
+        for (const info of message.swipe_info || []) if (info?.extra) delete info.extra.title;
+    }
+    cleanMessageImageRecords(message);
+        await context.saveChat();
+    // Pruning unused records does not change what is displayed. Keep the live DOM.
+    if (remove || message.mes !== originalText) {
+        updateMessageBlock(mesId, message);
+        renderMessageSlots(mesId);
+    }
+    toastr.success(remove ? '생성 정보를 삭제했습니다. 이미지는 유지됩니다.' : '연결이 끊긴 생성 정보를 정리했습니다. 현재 이미지와 리롤 원문은 유지됩니다.');
 }
 
 function getScrollableParents(element) {
@@ -624,6 +714,7 @@ function parseStructuredPicBlock(fullTag, content) {
                 name: baseCharacter.name,
                 prompt: [baseCharacter.prompt, extraPrompt].filter(Boolean).join(', '),
                 uc: baseCharacter.uc || '',
+                ...(baseCharacter.center ? { center: baseCharacter.center } : {}),
                 enabled: true,
                 source: 'autopic-ref',
                 ref,
@@ -690,6 +781,7 @@ function extractPicRequests(messageText, fallbackRegex) {
 }
 
 const defaultAutoPicSettings = {
+    translationCompatibility: 'off',
     insertType: INSERT_TYPE.DISABLED,
     lastNonDisabledType: INSERT_TYPE.INLINE, 
     theme: 'dark',
@@ -709,16 +801,42 @@ const defaultAutoPicSettings = {
     manualGeneration: { ...MANUAL_DEFAULTS },
 };
 
-const STRUCTURED_BLOCKS_PROMPT_VERSION = 6;
-const STRICT_TAG_BLOCKS_PROMPT_VERSION = 3;
+const STRUCTURED_BLOCKS_PROMPT_VERSION = 7;
+const STRICT_TAG_BLOCKS_PROMPT_VERSION = 4;
 const BUILT_IN_PROMPT_UPDATE_OFFER_VERSION = `${STRUCTURED_BLOCKS_PROMPT_VERSION}:${STRICT_TAG_BLOCKS_PROMPT_VERSION}`;
-const STRUCTURED_BLOCKS_PROMPT = `<image_generation>\nWhen an image should be generated, insert exactly one structured image block at the end of the reply.\nUse this exact format:\n<autopic>\n<scene>danbooru tags for character counts, background, location, mood, composition, camera distance, lighting, shared actions, and non-character situation only</scene>\n<apchar ref="exact registered ref name">danbooru tags for this registered character's temporary expression, pose, gaze, action, interaction, and contextually adapted outfit only</apchar>\n<apchar>danbooru tags for one unregistered character's full visual appearance, clothing, expression, pose, gaze, action, and interaction</apchar>\n<uc>optional negative danbooru tags only when needed</uc>\n</autopic>\n\n# Ref rules:\n- <autopic_registered_characters> is the complete allow-list for ref names.\n- Use <apchar ref="exact name"> only when that exact name appears in <autopic_registered_characters>.\n- Copy ref names exactly. Do not translate, rename, shorten, complete, or guess them.\n- Do not use {{char}}, {{user}}, chat names, aliases, nicknames, relationship names, or inferred names as ref unless that exact string appears in <autopic_registered_characters>.\n- If a character is not listed, never use ref for that character. Use plain <apchar> and include full visual appearance tags.\n\n# Tag rules:\n- Write concise English NovelAI/danbooru-style tags, separated by commas.\n- AutoPic assembles NovelAI character prompts. Do not write a final combined NovelAI prompt yourself.\n- For registered characters, do not describe base appearance; AutoPic adds it automatically.\n- For registered characters, write only temporary expression, pose, gaze, action, interaction, and contextually adapted outfit inside <apchar ref>.\n- If a registered character has an <apchar_outfit> field, treat it as their default clothing reference. Adapt it freely to the scene's location, situation, formality, and context. Keep matching clothing items when they fit; partial wear, layering, removal, or style variations are valid. If the scene implies a different outfit entirely, use that instead.\n- Put count tags such as 1girl, 1boy, 2girls, 1girl 1boy in <scene>.\n- Put background, place, mood, composition, camera distance, lighting, and shared actions in <scene>.\n- Do not use Character 1: labels.\n- Do not use the old <pic prompt="..."> format.\n</image_generation>`;
-const STRICT_TAG_BLOCKS_PROMPT = `<image_generation>\nOutput exactly one block when an image is needed:\n<autopic>\n<scene>1girl/1boy/count tags, background, location, composition, camera distance, lighting, shared actions</scene>\n<apchar ref="name from the valid ref list">ONLY temporary tags: expression, pose, gaze, action, interaction, contextually adapted outfit. NO hair, eyes, body, skin, species, age, or fixed permanent clothing.</apchar>\n<apchar>FULL character tags for an unregistered character: gender/count, hair, eyes, body, skin, species, age impression, clothing, expression, pose, gaze, action, interaction.</apchar>\n<uc>negative tags if needed</uc>\n</autopic>\n\n# Valid ref list rule:\n- The only valid ref names are inside <autopic_registered_characters>.\n- Use <apchar ref=\"exact name\"> only for a name copied exactly from that list.\n- Never use {{char}}, {{user}}, chat names, aliases, nicknames, or guessed names as ref unless the exact string is in the list.\n\n# Important difference:\n- Registered/listed character = <apchar ref=\"name\">temporary tags only; AutoPic adds base appearance.</apchar>\n- Unregistered/not listed character = <apchar>full appearance tags; do not use ref.</apchar>\n\n# Outfit note:\n- A registered character may have a clothing reference in <apchar_outfit>. This is a baseline, not a fixed prompt. Interpret it as their typical style and adapt to the scene: use the listed clothing when it fits, make casual variants, partial wear, weather/location-appropriate versions, or complete outfit changes when context calls for it. Do not blindly paste the entire reference; convert the relevant parts into scene-fit tags.\n\n# Bad:\n<apchar ref=\"Alice\">1girl, blonde hair, green eyes, school uniform, smiling</apchar>\n# Good if Alice is listed:\n<apchar ref=\"Alice\">smiling, looking at viewer, standing, holding cup</apchar>\n# Good if Alice is not listed:\n<apchar>1girl, blonde hair, green eyes, school uniform, smiling, looking at viewer, standing, holding cup</apchar>\n\nUse comma-separated English NovelAI/danbooru tags only. Do not use Character 1 labels or <pic prompt=\"...\">.\n</image_generation>`;
+
+
 
 defaultAutoPicSettings.promptInjection.prompt = STRUCTURED_BLOCKS_PROMPT;
 defaultAutoPicSettings.promptPresets.Default = STRUCTURED_BLOCKS_PROMPT;
 defaultAutoPicSettings.promptPresets["Structured Blocks"] = STRUCTURED_BLOCKS_PROMPT;
 defaultAutoPicSettings.promptPresets["Strict Tag Blocks"] = STRICT_TAG_BLOCKS_PROMPT;
+function refreshNaiUI(options) {
+        // NAI cfg_rescale UI 업데이트
+        const nai = getNaiParams();
+		$('#nai_use_server_plugin').prop('checked', !!nai.useServerPlugin);
+		$('#nai_plugin_options').css({ opacity: nai.useServerPlugin ? '1' : '0.4', 'pointer-events': nai.useServerPlugin ? 'auto' : 'none' });
+        $('#nai_character_positions_ai_choice').prop('checked', !!nai.useCharacterPositionsAiChoice);
+		$('#nai_cfg_rescale').val(nai.cfg_rescale);
+		$('#nai_cfg_rescale_display').text(Number(nai.cfg_rescale).toFixed(2));
+        $('#nai_seed_enabled').prop('checked', !!nai.seedEnabled);
+        $('#nai_seed_value').val(nai.seed ?? '');
+        // Vibe Transfer UI 동기화
+        $('#nai_vibe_enabled').prop('checked', !!nai.vibeEnabled);
+        $('#nai_vibe_options').css({ opacity: nai.vibeEnabled ? '1' : '0.4', 'pointer-events': nai.vibeEnabled ? 'auto' : 'none' });
+        renderVibeImageList();
+        // 레퍼런스 이미지 (Director Reference) UI 동기화
+        $('#nai_ref_enabled').prop('checked', !!nai.refEnabled);
+        $('#nai_ref_options').css({ opacity: nai.refEnabled ? '1' : '0.4', 'pointer-events': nai.refEnabled ? 'auto' : 'none' });
+        $('#nai_ref_mode').val(nai.refMode || 'character&style');
+        $('#nai_ref_strength').val(nai.refStrength);
+        $('#nai_ref_strength_display').text(Number(nai.refStrength).toFixed(2));
+        $('#nai_ref_fidelity').val(nai.refFidelity);
+        $('#nai_ref_fidelity_display').text(Number(nai.refFidelity).toFixed(2));
+        renderRefPreview();
+    void refreshDirectSettings(getNaiParams, options);
+}
+
 function updateUI() {
     $('#autopic_menu_item').toggleClass(
         'selected',
@@ -743,35 +861,13 @@ function updateUI() {
         $('#prompt_injection_position').val(extension_settings[extensionName].promptInjection.position);
         $('#prompt_injection_depth').val(extension_settings[extensionName].promptInjection.depth);
         
-        // NAI cfg_rescale UI 업데이트
-        const nai = getNaiParams();
-		$('#nai_use_server_plugin').prop('checked', !!nai.useServerPlugin);
-		$('#nai_plugin_options').css({ opacity: nai.useServerPlugin ? '1' : '0.4', 'pointer-events': nai.useServerPlugin ? 'auto' : 'none' });
-        $('#nai_character_positions_ai_choice').prop('checked', !!nai.useCharacterPositionsAiChoice);
-		$('#nai_cfg_rescale').val(nai.cfg_rescale);
-		$('#nai_cfg_rescale_display').text(Number(nai.cfg_rescale).toFixed(2));
-        $('#nai_seed_enabled').prop('checked', !!nai.seedEnabled);
-        $('#nai_seed_value').val(nai.seed ?? '');
-        // Vibe Transfer UI 동기화
-        $('#nai_vibe_enabled').prop('checked', !!nai.vibeEnabled);
-        $('#nai_vibe_options').css({ opacity: nai.vibeEnabled ? '1' : '0.4', 'pointer-events': nai.vibeEnabled ? 'auto' : 'none' });
-        renderVibeImageList();
-        // 레퍼런스 이미지 (Director Reference) UI 동기화
-        $('#nai_ref_enabled').prop('checked', !!nai.refEnabled);
-        $('#nai_ref_options').css({ opacity: nai.refEnabled ? '1' : '0.4', 'pointer-events': nai.refEnabled ? 'auto' : 'none' });
-        $('#nai_ref_mode').val(nai.refMode || 'character&style');
-        $('#nai_ref_strength').val(nai.refStrength);
-        $('#nai_ref_strength_display').text(Number(nai.refStrength).toFixed(2));
-        $('#nai_ref_fidelity').val(nai.refFidelity);
-        $('#nai_ref_fidelity_display').text(Number(nai.refFidelity).toFixed(2));
-        renderRefPreview();
+        refreshNaiUI();
         renderManualProfileSelect();
         const manual = getManualParams();
         $('#autopic_manual_enabled').prop('checked', !!manual.enabled);
         $('#autopic_manual_profile').val(manual.profileId || '');
         $('#autopic_manual_max_tokens').val(manual.maxTokens);
-        // NAI Rescale 비활성화 시 카드 흐리게
-        $('#nai-params-card').css('opacity', nai.useServerPlugin && extension_settings?.sd?.source === 'novel' ? '1' : '0.5');
+
 
         $('.theme-dot').removeClass('active');
         $(`.theme-dot[data-theme="${currentTheme}"]`).addClass('active');
@@ -1180,6 +1276,7 @@ async function createSettings(settingsHtml) {
     });
 
     // ── NAI cfg_rescale 바인딩 ────────────────────────────────
+    bindDirectSettings(getNaiParams, saveSettingsDebounced, refreshNaiUI);
 	$('#nai_use_server_plugin').on('change', function() {
 		const enabled = $(this).prop('checked');
 		const nai = getNaiParams();
@@ -1226,6 +1323,7 @@ async function createSettings(settingsHtml) {
     });
     $('#nai_character_positions_ai_choice').on('change', function() {
         getNaiParams().useCharacterPositionsAiChoice = $(this).prop('checked');
+        syncCharacterPositionVisibility(getNaiParams());
         saveSettingsDebounced();
     });
     // ─────────────────────────────────────────────────────────
@@ -1257,7 +1355,11 @@ async function createSettings(settingsHtml) {
                 if (!base64) return;
                 const nai = getNaiParams();
                 if (!Array.isArray(nai.vibeImages)) nai.vibeImages = [];
-                nai.vibeImages.push({ base64, infoExtracted: 1.0, strength: 0.6 });
+                if (isDirect(nai) && nai.vibeImages.length >= 16) {
+                    toastr.warning('Vibe 이미지는 최대 16장입니다.');
+                    return;
+                }
+                nai.vibeImages.push({ base64, infoExtracted: isDirect(nai) ? 0.7 : 1.0, strength: 0.6 });
                 saveSettingsDebounced();
                 renderVibeImageList();
             };
@@ -1481,13 +1583,16 @@ function letterboxToReferenceCanvas(dataUrl) {
     });
 }
 
+const referencePreviewCache = new WeakMap();
 function renderRefPreview() {
     const $preview = $('#nai_ref_preview');
     if (!$preview.length) return;
     const nai = getNaiParams();
+    if (referencePreviewCache.has($preview[0]) && referencePreviewCache.get($preview[0]) === nai.refImage) return;
+    referencePreviewCache.set($preview[0], nai.refImage);
     if (nai.refImage) {
         $preview.html(`
-            <img src="data:image/png;base64,${nai.refImage}" style="width:96px; height:96px; object-fit:cover; border-radius:8px; border:1px solid var(--ap-border); flex-shrink:0;">
+            <img loading="lazy" decoding="async" src="data:image/png;base64,${nai.refImage}" style="width:96px; height:96px; object-fit:cover; border-radius:8px; border:1px solid var(--ap-border); flex-shrink:0;">
             <button id="nai_ref_remove_btn" class="gen-btn gen-btn-red" style="padding:4px 10px; font-size:0.72rem; align-self:flex-start;">삭제</button>
         `);
     } else {
@@ -1549,6 +1654,7 @@ function renderCharacterLinkUI() {
 }
 
 
+const vibePreviewCache = new WeakMap();
 function renderVibeImageList() {
     const $list = $('#nai_vibe_list');
     if (!$list.length) return;
@@ -1556,6 +1662,10 @@ function renderVibeImageList() {
     const nai = getNaiParams();
     const images = Array.isArray(nai.vibeImages) ? nai.vibeImages : [];
 
+    const previous = vibePreviewCache.get($list[0]);
+    const keys = ['base64', 'infoExtracted', 'strength', 'favorite'];
+    if (previous?.length === images.length && images.every((v, i) => keys.every(k => v[k] === previous[i][k]))) return;
+    vibePreviewCache.set($list[0], images.map(v => Object.fromEntries(keys.map(k => [k, v[k]]))));
     $list.empty();
 
     if (images.length === 0) {
@@ -1565,7 +1675,7 @@ function renderVibeImageList() {
 
     images.forEach((vibe, idx) => {
         const preview = vibe.base64
-            ? `<img src="data:image/png;base64,${vibe.base64}" style="width:64px; height:64px; object-fit:cover; border-radius:6px; flex-shrink:0; border:1px solid var(--ap-border);">`
+            ? `<img loading="lazy" decoding="async" src="data:image/png;base64,${vibe.base64}" style="width:64px; height:64px; object-fit:cover; border-radius:6px; flex-shrink:0; border:1px solid var(--ap-border);">`
             : `<div style="width:64px; height:64px; background:var(--ap-bg-input); border-radius:6px; border:1px dashed var(--ap-border); flex-shrink:0;"></div>`;
 
         const infoVal = typeof vibe.infoExtracted === 'number' ? vibe.infoExtracted : 1.0;
@@ -1655,17 +1765,34 @@ function renderCharacterPrompts() {
                 <div style="display:flex; flex-direction:column; gap:8px;">
                     <input class="gen-custom-input char-name-input" data-index="${index}" value="${escapeHtmlAttribute(item.name || '')}" placeholder="Reference name for &lt;apchar ref=&quot;name&quot;&gt;">
                     <textarea class="gen-custom-input char-prompt-input" data-index="${index}" rows="2" placeholder="캐릭터 외형 프롬프트 (AI는 못 봄)" style="resize: vertical;">${item.prompt || ''}</textarea>
-                    <textarea class="gen-custom-input char-clothing-input" data-index="${index}" rows="1" placeholder="캐릭터 의상 프롬프트 (AI가 읽을 수 있음)" style="resize: vertical;">${item.clothing || ''}</textarea>
+                    <textarea class="gen-custom-input char-clothing-input" data-index="${index}" rows="1" placeholder="의상·착용 장신구만 — 뿔·머리색·신체 특징 제외 (AI가 읽음)" style="resize: vertical;">${item.clothing || ''}</textarea>
                     <textarea class="gen-custom-input char-uc-input" data-index="${index}" rows="1" placeholder="캐릭터 UC (선택사항)" style="resize: vertical;">${item.uc || ''}</textarea>
+                    <div class="ap-character-position" hidden>
+                        <span>직접 생성 위치 <small>0–1</small></span>
+                        <div class="ap-coordinate-fields">
+                            <label>X <input class="gen-custom-input char-center-input" type="number" min="0" max="1" step="0.01" data-index="${index}" data-axis="x" value="${Number.isFinite(item.center?.x) ? item.center.x : ''}" placeholder="자동 배치"></label>
+                            <label>Y <input class="gen-custom-input char-center-input" type="number" min="0" max="1" step="0.01" data-index="${index}" data-axis="y" value="${Number.isFinite(item.center?.y) ? item.center.y : ''}" placeholder="자동 배치"></label>
+                        </div>
+                    </div>
                 </div>
             </div>
         `;
         $list.append(html);
     });
 
+    syncCharacterPositionVisibility(getNaiParams());
+
     $('.char-name-input').off('input').on('input', function() {
         const idx = $(this).data('index');
         charData[idx].name = $(this).val();
+        saveSettingsDebounced();
+    });
+
+    $('.char-center-input').off('change').on('change', function() {
+        const item = charData[Number(this.dataset.index)];
+        item.center ??= {};
+        if (this.value === '') delete item.center[this.dataset.axis];
+        else item.center[this.dataset.axis] = Number(this.value);
         saveSettingsDebounced();
     });
 
@@ -1690,6 +1817,7 @@ function renderCharacterPrompts() {
     $('.char-enabled-checkbox').off('change').on('change', function() {
         const idx = $(this).data('index');
         charData[idx].enabled = $(this).prop('checked');
+        syncCharacterPositionVisibility(getNaiParams());
         saveSettingsDebounced();
     });
 
@@ -1913,7 +2041,7 @@ function renderManualProfileSelect() {
     const profiles = Array.isArray(manager?.profiles) ? manager.profiles : [];
 
     $select.empty();
-    $select.append('<option value="">연결 프로필 선택</option>');
+    $select.append('<option value="">현재 사용 중인 연결 · ST 설정 사용</option>');
 
     for (const profile of profiles.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))) {
         const value = escapeHtmlAttribute(profile.id || '');
@@ -1967,7 +2095,7 @@ function buildAvailableCharacterRefsPrompt(charData) {
         return `- ${item.name}`;
     });
 
-    return `\n\n<autopic_registered_characters>\nThese are the only valid ref names for <apchar ref=\"...\">. Use a ref only when the exact name is listed before the '|' symbol. <apchar_outfit> is a default clothing reference, not fixed output text.\n${lines.join('\n')}\n</autopic_registered_characters>`;
+    return `\n\n<autopic_registered_characters>\nThese are the only valid ref names for <apchar ref=\"...\">. Use a ref only when the exact name is listed before the '|' symbol. <apchar_outfit> contains attire and worn accessories only. Ignore any horns, ears, tails, wings, hair, eyes, skin or anatomy in it; physical traits are not clothing. Adapt the clothing instead of copying this reference verbatim.\n${lines.join('\n')}\n</autopic_registered_characters>`;
 }
 
 function getFinalPrompt() {
@@ -2075,7 +2203,7 @@ $(function () {
 					border-radius: 12px !important;
                 }
 
-                .mes_media_container {
+                .autopic-media-owner .mes_media_container {
                     display: flex !important;
                     justify-content: center !important;
                     position: relative !important;
@@ -2089,13 +2217,13 @@ $(function () {
                 }
 
 
-				.mes_media_container img.mes_img,
-				.mes_media_container video {
+				.autopic-media-owner .mes_media_container img.mes_img,
+				.autopic-media-owner .mes_media_container video {
 					border-radius: 12px !important;
 				}
-				.mes_img_swipes,
-				.mes_img_controls,
-				.mes_video_controls {
+				.autopic-media-owner .mes_img_swipes,
+				.autopic-media-owner .mes_img_controls,
+				.autopic-media-owner .mes_video_controls {
 					background: none !important;
 					box-shadow: none !important;
 					opacity: 0 !important;
@@ -2103,10 +2231,10 @@ $(function () {
 					transition: opacity 0.15s ease-in-out !important;
 				}
 
-				.mes_media_container:hover .mes_img_controls,
-				.mes_media_container:hover .mes_img_swipes,
-				.mes_media_container.ui-active .mes_img_controls,
-				.mes_media_container.ui-active .mes_img_swipes {
+				.autopic-media-owner .mes_media_container:hover .mes_img_controls,
+				.autopic-media-owner .mes_media_container:hover .mes_img_swipes,
+				.autopic-media-owner .mes_media_container.ui-active .mes_img_controls,
+				.autopic-media-owner .mes_media_container.ui-active .mes_img_swipes {
 					opacity: 0.9 !important;
 					pointer-events: auto !important;
 				}
@@ -2114,7 +2242,7 @@ $(function () {
 				/* ===============================
 				   2. 우측 상단 버튼 (아이콘)
 				================================ */
-                .mes_img_controls {
+                .autopic-media-owner .mes_img_controls {
                     display: flex !important;
                     flex-direction: row !important;
                     justify-content: flex-end !important;
@@ -2126,7 +2254,7 @@ $(function () {
                     height: auto !important;
                 }
 
-				.mes_img_controls .right_menu_button {
+				.autopic-media-owner .mes_img_controls .right_menu_button {
 					background: none !important;
 					width: 28px !important;
 					height: 28px !important;
@@ -2141,7 +2269,7 @@ $(function () {
 				/* ===============================
 				   3. 하단 중앙 스와이프 (텍스트 중심)
 				================================ */
-				.mes_img_swipes {
+				.autopic-media-owner .mes_img_swipes {
 					bottom: 4px !important;
 					left: 50% !important;
 					transform: translateX(-50%) !important;
@@ -2150,15 +2278,15 @@ $(function () {
 					gap: 10px !important;
 				}
 
-				.mes_img_swipe_left,
-				.mes_img_swipe_right {
+				.autopic-media-owner .mes_img_swipe_left,
+				.autopic-media-owner .mes_img_swipe_right {
 					background: none !important;
 					color: rgba(255,255,255,0.97) !important;
 					font-size: 18px !important;
 					text-shadow: 0 1px 2px rgba(0,0,0,0.6) !important;
 				}
 
-				.mes_img_swipe_counter {
+				.autopic-media-owner .mes_img_swipe_counter {
 					background: none !important;
 					color: rgba(255,255,255,0.85) !important;
 					font-size: 0.85rem !important;
@@ -2167,7 +2295,7 @@ $(function () {
 					text-shadow: 0 1px 2px rgba(0,0,0,0.6) !important;
 				}
 
-                .mes_img_swipe_left, .mes_img_swipe_right {
+                .autopic-media-owner .mes_img_swipe_left, .mes_img_swipe_right {
                     min-width: 40px !important;
                     min-height: 40px !important;
                     display: flex !important;
@@ -2183,7 +2311,7 @@ $(function () {
                         margin-bottom: 45px !important;
                     }
 
-                    .mes_img_swipes {
+                    .autopic-media-owner .mes_img_swipes {
                         opacity: 0 !important;   
                         pointer-events: none !important;
                         z-index: 1000 !important;
@@ -2193,25 +2321,25 @@ $(function () {
                         transition: opacity 0.15s ease-in-out !important;
                     }
 
-                    .mes_media_container.ui-active .mes_img_swipes,
-                    .mes_media_container.ui-active .mes_img_controls {
+                    .autopic-media-owner .mes_media_container.ui-active .mes_img_swipes,
+                    .autopic-media-owner .mes_media_container.ui-active .mes_img_controls {
                         opacity: 1 !important;
                         pointer-events: auto !important;
                     }
 
-                    .mes_img_swipe_left, .mes_img_swipe_right {
+                    .autopic-media-owner .mes_img_swipe_left, .mes_img_swipe_right {
                         opacity: 0.2 !important;
                         transition: opacity 0.2s !important;
                     }
 
-                    .mes_media_container.ui-active .mes_img_swipe_left,
-                    .mes_media_container.ui-active .mes_img_swipe_right {
+                    .autopic-media-owner .mes_media_container.ui-active .mes_img_swipe_left,
+                    .autopic-media-owner .mes_media_container.ui-active .mes_img_swipe_right {
                         opacity: 1 !important;
                     }
                 }
                 }
 
-				.mes_media_container::after {
+				.autopic-media-owner .mes_media_container::after {
 					display: none !important;
 				}
 				/* ===============================
@@ -2319,6 +2447,7 @@ $(function () {
         await loadSettings();
         await addToWandMenu();
         await createSettings(settingsHtml);
+        initializeSlotSettings();
         scheduleBuiltInPromptPresetUpdateOffer();
 
         $('#extensions-settings-button').on('click', () => setTimeout(updateUI, 200));
@@ -2339,7 +2468,7 @@ $(function () {
                         const tempDiv = document.createElement('div');
                         tempDiv.innerHTML = imgTagMatch[0];
                         const imgEl = tempDiv.querySelector('img');
-                        const titleVal = imgEl ? (imgEl.getAttribute('title') || imgEl.getAttribute('alt') || '') : '';
+                        const titleVal = getAutopicImagePrompt(message, imgEl);
                         if (titleVal) {
                             if (!message.extra) message.extra = {};
                             message.extra.title = titleVal;
@@ -2351,6 +2480,7 @@ $(function () {
         });
 
         eventSource.on(event_types.MESSAGE_UPDATED, (mesId) => {
+            cleanMessageImageRecords(getContext().chat?.[mesId]);
             const context = getContext();
             const message = context.chat[mesId];
             if (message && !message.is_user && !message.extra?.title) {
@@ -2363,6 +2493,11 @@ $(function () {
                 }
             }
             refreshAutopicMessageControls(mesId);
+        });
+
+        if (event_types.MESSAGE_EDITED) eventSource.on(event_types.MESSAGE_EDITED, mesId => {
+            const message = getContext().chat?.[mesId];
+            if (message) { compactAutopicImageTitles(message); cleanMessageImageRecords(message); }
         });
 
         eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (mesId) => {
@@ -2391,14 +2526,14 @@ $(function () {
          * ------------------------------------------------------- */
         document.addEventListener('click', function (e) {
             const target = e.target;
-            const $mediaContainer = $(target).closest('.mes_media_container, .autopic-tag-img-wrapper');
+            const $mediaContainer = $(target).closest('.autopic-media-owner .mes_media_container, .autopic-tag-img-wrapper');
             
             if ($mediaContainer.length === 0) {
                 $('.mes_media_container.ui-active, .autopic-tag-img-wrapper.ui-active').removeClass('ui-active');
                 return;
             }
 
-            const isButton = $(target).closest('.right_menu_button, .mes_img_controls, .mes_img_swipes, .autopic-control-btn, .autopic-tag-controls, .reroll-trigger').length > 0;
+            const isButton = $(target).closest('.right_menu_button, .mes_img_controls, .mes_img_swipes, .autopic-control-btn, .autopic-tag-controls, .autopic-aux-controls, .reroll-trigger').length > 0;
 
             if (window.innerWidth < 1000 && !$mediaContainer.hasClass('ui-active')) {
                 if (!isButton) {
@@ -2418,7 +2553,7 @@ $(function () {
             
         }, true);
 
-        $(document).off('click', '.image-reroll-button, .mes_img_swipe_counter').on('click', '.image-reroll-button, .mes_img_swipe_counter', function (e) {
+        $(document).off('click.autopicReroll', '.autopic-image-reroll-button').on('click.autopicReroll', '.autopic-image-reroll-button', function (e) {
             if ($(this).hasClass('mes_img_swipe_counter')) {
                 e.stopPropagation();
                 e.preventDefault();
@@ -2438,7 +2573,7 @@ $(function () {
             handleReroll(mesId, imgTitle, null, $visibleImg.attr('src') || '', currentSwipeIdx);
         });
 
-        $(document).off('click', '.image-seed-save-button').on('click', '.image-seed-save-button', async function(e) {
+        $(document).off('click', '.autopic-image-seed-save-button').on('click', '.autopic-image-seed-save-button', async function(e) {
             e.preventDefault();
             e.stopImmediatePropagation();
 
@@ -2446,7 +2581,7 @@ $(function () {
             let $visibleImg = messageBlock.find('.mes_img_container:not([style*="display: none"]) img.mes_img');
             if ($visibleImg.length === 0) $visibleImg = messageBlock.find('img.mes_img').first();
 
-            await saveSeedFromImageSrc($visibleImg.attr('src') || '');
+            await saveSeedFromImageSrc($(this).closest('.mes_media_container').find('img.mes_img').attr('src') || selectedGallerySource(getContext().chat?.[Number(messageBlock.attr('mesid'))]) || $visibleImg.attr('src') || '');
         });
 
         $(document).off('click.autopicSeedRefresh', '.mes_img_swipe_left, .mes_img_swipe_right')
@@ -2455,7 +2590,7 @@ $(function () {
                 scheduleInlineGalleryControlRefresh(mesId);
             });
 
-        $(document).off('click', '.reroll-trigger').on('click', '.reroll-trigger', function(e) {
+        $(document).off('click.autopicTag', '.reroll-trigger').on('click.autopicTag', '.reroll-trigger', function(e) {
             e.preventDefault(); 
             e.stopImmediatePropagation();
             const mesId = $(this).data('mesid');
@@ -2475,8 +2610,7 @@ $(function () {
             
             if (mesId !== undefined) {
                 // ST 스와이프 렌더링이 끝날 때까지 충분히 기다린 후 버튼 재부착
-                setTimeout(() => attachTagControls(mesId), 300);
-                setTimeout(() => attachTagControls(mesId), 700);
+                refreshAutopicMessageControls(mesId);
             }
         });
 
@@ -2542,6 +2676,12 @@ async function handleLastImageReroll() {
         const message = chat[i];
         if (message.is_user) continue;
 
+        const lastSlotId = slotIds(message.mes).at(-1);
+        if (lastSlotId) {
+            await rerollImageSlot(i, lastSlotId);
+            return;
+        }
+
         const hasPic = message.mes.match(picRegex);
         const hasImg = message.mes.match(imgRegex);
         const hasAutopic = getStructuredRequestsFromText(message.mes).length > 0 || autopicRegex.test(message.mes);
@@ -2583,68 +2723,6 @@ function normalizeImageSwipeSrc(src) {
     return value.replace(/^data:image\/[^;,]+;base64,/i, '');
 }
 
-function bytesToText(bytes) {
-    try {
-        return new TextDecoder('utf-8').decode(bytes);
-    } catch (_) {
-        return Array.from(bytes).map(b => String.fromCharCode(b)).join('');
-    }
-}
-
-function findSeedInMetadataText(text) {
-    const value = String(text ?? '');
-    const patterns = [
-        /"seed"\s*:\s*(\d{1,15})/i,
-        /\bseed\b\D{0,40}(\d{1,15})/i,
-    ];
-
-    for (const pattern of patterns) {
-        const match = value.match(pattern);
-        if (match?.[1]) return match[1];
-    }
-
-    return '';
-}
-
-function extractSeedFromPngBuffer(arrayBuffer) {
-    const bytes = new Uint8Array(arrayBuffer);
-    const signature = [137, 80, 78, 71, 13, 10, 26, 10];
-    const isPng = signature.every((value, index) => bytes[index] === value);
-
-    if (isPng) {
-        const view = new DataView(arrayBuffer);
-        let offset = 8;
-
-        while (offset + 8 <= bytes.length) {
-            const length = view.getUint32(offset);
-            const type = bytesToText(bytes.slice(offset + 4, offset + 8));
-            const dataStart = offset + 8;
-            const dataEnd = dataStart + length;
-            if (dataEnd + 4 > bytes.length) break;
-
-            if (type === 'tEXt') {
-                const text = bytesToText(bytes.slice(dataStart, dataEnd));
-                const seed = findSeedInMetadataText(text);
-                if (seed) return seed;
-            } else if (type === 'iTXt') {
-                const data = bytes.slice(dataStart, dataEnd);
-                const zeroIndexes = [];
-                for (let i = 0; i < data.length && zeroIndexes.length < 5; i++) {
-                    if (data[i] === 0) zeroIndexes.push(i);
-                }
-                const textStart = zeroIndexes.length >= 5 ? zeroIndexes[4] + 1 : 0;
-                const text = bytesToText(data.slice(textStart));
-                const seed = findSeedInMetadataText(text);
-                if (seed) return seed;
-            }
-
-            offset = dataEnd + 4;
-        }
-    }
-
-    return findSeedInMetadataText(bytesToText(bytes));
-}
-
 async function getImageArrayBufferFromSrc(src) {
     const imageSrc = decodeHtmlAttribute(String(src ?? '')).trim();
     if (!imageSrc) throw new Error('Image source is empty.');
@@ -2673,16 +2751,17 @@ function syncNaiSeedUi() {
 
 async function saveSeedFromImageSrc(src) {
     const nai = getNaiParams();
-    if (!nai.useServerPlugin) {
+    if (!nai.useServerPlugin && !isDirect(nai)) {
         toastr.warning('NovelAI 고급 파라미터의 서버 플러그인 사용을 먼저 켜주세요.', 'AutoPic Seed');
         return;
     }
 
     try {
         const arrayBuffer = await getImageArrayBufferFromSrc(src);
-        const seed = extractSeedFromPngBuffer(arrayBuffer);
+        const metadata = await readMetadataBuffer(arrayBuffer);
+        const seed = metadata.data.seed;
 
-        if (!seed) {
+        if (!Number.isInteger(Number(seed)) || seed == null || Number(seed) < 0 || Number(seed) > 4294967295) {
             toastr.warning('현재 이미지에서 Seed 메타데이터를 찾지 못했습니다.', 'AutoPic Seed');
             return;
         }
@@ -2748,12 +2827,12 @@ function getAutopicTextSwipePayloads(message, swipeId = getCurrentTextSwipeId(me
     const byHash = message?.extra?.autopic_text_swipe_payloads_by_hash;
     const hash = getAutopicTextSwipeHash(message, swipeId);
     const hashedPayloads = byHash?.[hash];
-    if (Array.isArray(hashedPayloads)) return hashedPayloads;
+    if (Array.isArray(hashedPayloads)) return hashedPayloads.map(p => resolveRecord(message, p)).filter(Boolean);
     if (byHash && typeof byHash === 'object' && Object.keys(byHash).length > 0) return [];
 
     const bySwipe = message?.extra?.autopic_text_swipe_payloads;
     const payloads = bySwipe?.[String(swipeId)];
-    return Array.isArray(payloads) ? payloads : [];
+    return Array.isArray(payloads) ? payloads.map(p => resolveRecord(message, p)).filter(Boolean) : [];
 }
 
 function openCurrentTextSwipeRerollIfAvailable(mesId) {
@@ -2770,22 +2849,130 @@ function openCurrentTextSwipeRerollIfAvailable(mesId) {
     return true;
 }
 
-function refreshAutopicMessageControls(mesId, delays = [150]) {
-    const numericMesId = Number(mesId);
-    if (!Number.isInteger(numericMesId)) return;
+const pendingControlFrames = new Map();
+function useImageSlots() {
+    const settings = extension_settings[extensionName];
+    return settings?.translationCompatibility === 'slots' && settings.insertType === INSERT_TYPE.REPLACE;
+}
 
-    observeAutopicMessageControls(numericMesId);
-    addRerollButtonToMessage(numericMesId);
-    addManualGenerateButtonToMessage(numericMesId);
-    removeMobileToggleFromMessage(numericMesId);
-    attachSwipeRerollListeners(numericMesId);
+function renderMessageSlots(mesId, eagerSlotId = null) {
+    const id = Number(mesId);
+    if (!Number.isInteger(id)) return;
+    const message = getContext().chat?.[id];
+    // Also retain this minimal normal-render fallback when compatibility is off.
+    if (!message?.mes?.includes('autopic-image-slot')) return;
+    const result = renderSlots(document.querySelector(`.mes[mesid="${id}"] .mes_text`), message, { eagerSlotId });
+    attachTagControls(id);
+    return result;
+}
 
-    delays.forEach(delay => setTimeout(() => {
-        addRerollButtonToMessage(numericMesId);
-        removeMobileToggleFromMessage(numericMesId);
-        attachSwipeRerollListeners(numericMesId);
-        attachTagControls(numericMesId);
-    }, delay));
+const subscribeSlotTranslation = slotSubscription(eventSource, renderMessageSlots);
+function syncSlotCompatibility() {
+    const settings = extension_settings[extensionName];
+    const enabled = settings.translationCompatibility === 'slots';
+    subscribeSlotTranslation(enabled);
+    if (configureSlotProtection(extension_settings['llm-translator-custom'], settings, enabled)) saveSettingsDebounced();
+    $('#autopic_translation_compatibility').val(enabled ? 'slots' : 'off');
+    $('#autopic_translation_details').prop('hidden', !enabled);
+    $('#autopic_translation_detected').text(extension_settings['llm-translator-custom'] ? 'llm-translator-custom 감지됨 · 태그 치환 모드에서 사용할 수 있습니다.' : '번역 확장을 사용하는 경우 선택하세요.');
+}
+
+function initializeSlotSettings() {
+    syncSlotCompatibility();
+    $('#autopic_translation_compatibility').on('change', function () {
+        extension_settings[extensionName].translationCompatibility = this.value === 'slots' ? 'slots' : 'off';
+        syncSlotCompatibility();
+        saveSettingsDebounced();
+    });
+    $('#autopic_convert_slots').on('click', convertCurrentChatSlots);
+    // Extensions can initialize after AutoPic. This does not enable the option.
+    if (event_types.APP_READY) eventSource.on(event_types.APP_READY, syncSlotCompatibility);
+}
+
+async function generateImageSlot(context, message, slot, prepared) {
+    const src = await sdCallWithRescale({ quiet: 'true' }, prepared.prompt || '', prepared.naiPayload);
+    if (typeof src !== 'string' || !src.trim() || src.startsWith('Error')) throw new Error('AutoPic 이미지 생성에 실패했습니다.');
+    // Never save a different chat if the user navigated away while generation was pending.
+    const index = getContext().chat?.indexOf(message) ?? -1;
+    if (index < 0) { toastr.warning('이미지 생성은 완료됐지만 채팅이 바뀌어 슬롯에 연결하지 않았습니다.'); return; }
+    if (!writeSlot(message, slot.id, { src, editText: prepared.editText || slot.record.editText || prepared.prompt })) {
+        throw new Error('이미지 생성은 완료됐지만 원래 슬롯을 찾지 못했습니다.');
+    }
+    // Start loading the generated image without waiting for the chat save round trip.
+    const display = renderMessageSlots(index, slot.id);
+    await context.saveChat();
+    if (slotIds(message.mes).includes(slot.id) && (!display || !display.rendered.includes(slot.id))) {
+        console.warn('[AutoPic] Slot display failed', { slotId: slot.id, reason: display?.failed[slot.id] || 'marker-not-rendered' });
+        toastr.warning('이미지는 저장됐지만 화면의 슬롯에 표시하지 못했습니다. 마지막 이미지 리롤은 해당 슬롯을 선택합니다.');
+    } else {
+        toastr.success('AutoPic 이미지 생성 및 저장 완료');
+    }
+}
+
+const pendingSlotRerolls = new Set();
+async function rerollImageSlot(mesId, id) {
+    const context = getContext(), message = context.chat?.[mesId];
+    const record = slotRecord(message, id);
+    if (!record?.editText) { toastr.warning('이 이미지의 생성 원문이 없습니다.'); return; }
+    if (pendingSlotRerolls.has(id)) return;
+    pendingSlotRerolls.add(id);
+    try {
+        await handleReroll(mesId, record.editText, `slot-${id}`, record.src || '', null, null, id);
+    } catch (error) { toastr.error(error?.message || 'AutoPic 리롤 실패'); }
+    finally { pendingSlotRerolls.delete(id); }
+}
+
+async function convertCurrentChatSlots() {
+    if (extension_settings[extensionName]?.translationCompatibility !== 'slots') return;
+    const context = getContext();
+    const candidates = [];
+    for (const [index, message] of context.chat.entries()) {
+        if (message.is_user || !message.mes?.includes('data-autopic-id')) continue;
+        const tags = [...message.mes.matchAll(/<img\b(?:[^>"']|"[^"]*"|'[^']*')*>/gi)].map(match => match[0]);
+        for (const tag of tags) {
+            const template = document.createElement('template'); template.innerHTML = tag;
+            const image = template.content.querySelector('img[data-autopic-id]');
+            if (!image?.getAttribute('src')) continue;
+            candidates.push({ index, message, tag, src: image.getAttribute('src'), editText: getAutopicImagePrompt(message, image) });
+        }
+    }
+    if (!candidates.length) {
+        const alreadyUsingSlots = context.chat.some(message => slotIds(message.mes).length > 0);
+        toastr.info(alreadyUsingSlots
+            ? '이미 번역용 방식을 사용 중인 이미지가 있습니다. 추가로 바꿀 예전 방식의 이미지는 없습니다.'
+            : '이 채팅에는 바꿀 수 있는 예전 태그 치환 이미지가 없습니다. 메시지에 따로 삽입한 이미지와 일반 첨부 이미지는 대상이 아닙니다.');
+        return;
+    }
+    if (!await callGenericPopup(`현재 채팅에서 예전 방식으로 글 사이에 넣은 이미지 ${candidates.length}개를 번역용 방식으로 바꾸고 저장합니다. 그림과 위치는 유지됩니다. 각 메시지에서 지금 선택한 답변만 바꾸며, 화살표로 넘겨 볼 수 있는 다른 답변은 그대로 둡니다. 기존 번역은 다시 해야 할 수 있습니다. 진행할까요?`, POPUP_TYPE.CONFIRM)) return;
+    if (getContext().chat !== context.chat || extension_settings[extensionName]?.translationCompatibility !== 'slots') return;
+    const changed = new Set();
+    for (const item of candidates) {
+        if (context.chat[item.index] !== item.message) continue;
+        if (reserveSlot(item.message, item.tag, item.editText, item.src)) changed.add(item.index);
+    }
+    // Notify the normal edit lifecycle only for this explicitly requested conversion.
+    // The translator owns its cache/display fields; AutoPic never clears them itself.
+    for (const index of changed) {
+        const message = context.chat[index];
+        await eventSource.emit(event_types.MESSAGE_UPDATED, index);
+        updateMessageBlock(index, message);
+        renderMessageSlots(index);
+    }
+    if (changed.size) await context.saveChat();
+    toastr.success('예전 방식의 이미지를 번역용으로 바꿨습니다. 이전 번역이 그대로 보이면 다시 번역해 주세요.');
+}
+
+function refreshAutopicMessageControls(mesId) {
+    const id = Number(mesId);
+    if (!Number.isInteger(id) || pendingControlFrames.has(id)) return;
+    pendingControlFrames.set(id, requestAnimationFrame(() => {
+        pendingControlFrames.delete(id);
+        renderMessageSlots(id);
+        observeAutopicMessageControls(id);
+        addRerollButtonToMessage(id);
+        addManualGenerateButtonToMessage(id);
+        attachTagControls(id);
+    }));
 }
 
 function observeAutopicMessageControls(mesId) {
@@ -2805,8 +2992,13 @@ function observeAutopicMessageControls(mesId) {
         scheduled = true;
         requestAnimationFrame(() => {
             scheduled = false;
-            addRerollButtonToMessage(numericMesId);
-            removeMobileToggleFromMessage(numericMesId);
+            if (!messageElement.isConnected) { observer.disconnect(); return; }
+            // Our own button insertions must not schedule another frame.
+            observer.disconnect();
+            try {
+                addRerollButtonToMessage(numericMesId);
+                removeMobileToggleFromMessage(numericMesId);
+            } finally { observer.observe(messageElement, { childList: true, subtree: true }); }
         });
     });
 
@@ -2818,28 +3010,79 @@ function initializeAllAutopicMessageControls() {
     const context = getContext();
     if (!context?.chat) return;
 
-    context.chat.forEach((_, index) => {
-        refreshAutopicMessageControls(index, [100, 300, 700]);
+    for (const [id, entry] of autopicMessageObservers) {
+        if (!entry.target.isConnected) { entry.observer.disconnect(); autopicMessageObservers.delete(id); }
+    }
+    document.querySelectorAll('#chat .mes[mesid]').forEach(element => {
+        refreshAutopicMessageControls(Number(element.getAttribute('mesid')), [150]);
     });
 }
 
-function scheduleInlineGalleryControlRefresh(mesId, delays = [80, 250, 600, 1000]) {
-    const numericMesId = Number(mesId);
-    if (!Number.isInteger(numericMesId)) return;
+function scheduleInlineGalleryControlRefresh(mesId) { refreshAutopicMessageControls(mesId); }
 
-    delays.forEach(delay => setTimeout(() => {
-        addRerollButtonToMessage(numericMesId);
-        removeMobileToggleFromMessage(numericMesId);
-    }, delay));
+function imageManagementButtons(mesId) {
+    return `<button type="button" class="autopic-record-clean fa-solid fa-broom" data-mesid="${mesId}" title="사용하지 않는 생성 정보 정리 (현재 이미지·리롤 원문 유지)" aria-label="사용하지 않는 생성 정보 정리"></button><button type="button" class="autopic-record-clear fa-solid fa-eraser" data-mesid="${mesId}" title="이 메시지의 생성 정보 삭제 (이미지 유지)" aria-label="생성 정보 삭제"></button>`;
 }
+
+// Capture before ST's native overswipe emits IMAGE_SWIPED and invokes its generator.
+function routeAutopicImageClick(event) {
+    const control = event.target.closest?.('#chat .mes .autopic-image-reroll-button, #chat .mes .reroll-trigger, #chat .mes .mes_img_swipe_right, #chat .mes .mes_img_swipe_left, #chat .mes .mes_img_swipe_counter, #chat .mes .sd_message_gen, #chat .mes .mes_media_delete, #chat .mes .autopic-record-clean, #chat .mes .autopic-record-clear');
+    if (!control) return;
+    const block = control.closest('.mes'), mesId = Number(block.getAttribute('mesid'));
+    const message = getContext().chat?.[mesId];
+    if (!message) return;
+    if (control.matches('.autopic-record-clean, .autopic-record-clear')) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        void manageImageRecords(mesId, control.matches('.autopic-record-clear')); return;
+    }
+    if (control.matches('.mes_media_delete')) { migrateImageRecords(message); return; }
+    const image = control.closest('.autopic-tag-img-wrapper')?.querySelector('img') || $(block).find('.mes_img_container:visible img.mes_img').get(0) || block.querySelector('img.mes_img');
+    const slotId = control.closest('span[data-autopic-slot]')?.getAttribute('data-autopic-slot')
+        || image?.getAttribute('data-autopic-slot')
+        || (/^slot-([a-zA-Z0-9-]+)$/.exec(control.getAttribute('data-autopic-id') || image?.getAttribute('data-autopic-id') || '')?.[1]);
+    if (slotId && control.matches('.reroll-trigger')) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        void rerollImageSlot(mesId, slotId);
+        return;
+    }
+    recoverGalleryRecords(message);
+    migrateImageRecords(message);
+    const src = control.getAttribute('data-image-src') || control.closest('.mes_media_container')?.querySelector('img')?.getAttribute('src') || selectedGallerySource(message) || image?.getAttribute('src') || '';
+    const ownButton = control.matches('.autopic-image-reroll-button, .reroll-trigger');
+    const owned = !!imageRecord(message, src) || !!image?.getAttribute('data-autopic-id');
+    if (!ownButton && (!owned || !isDirect(getNaiParams()))) return;
+    if (control.matches('.mes_img_swipe_right, .mes_img_swipe_left')) {
+        const [current, total] = (block.querySelector('.mes_img_swipe_counter')?.textContent || '').split('/').map(Number);
+        const sources = gallerySources(message);
+        const index = message.extra?.media_index ?? sources.findIndex(url => imageKey(url) === imageKey(src));
+        const edge = control.matches('.mes_img_swipe_left') ? (index >= 0 ? index === 0 : current === 1) : (index >= 0 ? index === sources.length - 1 : current === total);
+        if (!edge) return;
+    }
+    event.preventDefault(); event.stopImmediatePropagation();
+    const prompt = imageRecord(message, src)?.editText || getAutopicImagePrompt(message, image) || control.getAttribute('data-prompt') || '';
+    if (!prompt || prompt === 'AutoPic') { toastr.warning('이 이미지의 생성 원문이 없습니다. 원본 이미지 메타데이터를 불러와 주세요.'); return; }
+    void handleReroll(mesId, prompt, image?.getAttribute('data-autopic-id'), src);
+}
+document.addEventListener('click', routeAutopicImageClick, true);
 
 function addRerollButtonToMessage(mesId) {
     const $message = $(`.mes[mesid="${mesId}"]`);
+    const message = getContext().chat?.[mesId];
+    if (!message) return;
+    recoverGalleryRecords(message);
+    migrateImageRecords(message);
+    const ownsImages = !!message.extra?.autopic_images || !!message.extra?.autopic_swipe_payloads;
+    if (!ownsImages) return;
+    $message.addClass('autopic-media-owner');
     const $controls = $message.find('.mes_img_controls');
     $controls.each(function() {
         const $this = $(this);
-        if (!$this.find('.image-reroll-button').length) {
-            const rerollBtn = `<div title="Generate Another Image" class="right_menu_button fa-solid fa-rotate image-reroll-button interactable" role="button" tabindex="0"></div>`;
+        const $media = $this.closest('.mes_media_container');
+        let $aux = $media.children('.autopic-aux-controls');
+        if (!$aux.length) { $aux = $('<div class="autopic-aux-controls autopic-aux-gallery"></div>'); $media.append($aux); }
+        if (!$aux.find('.autopic-record-clean').length) $aux.append(imageManagementButtons(mesId));
+        if (!$this.find('.autopic-image-reroll-button').length) {
+            const rerollBtn = `<div title="Generate Another Image" class="right_menu_button fa-solid fa-rotate autopic-image-reroll-button interactable" role="button" tabindex="0"></div>`;
             
             const deleteBtn = $this.find('.mes_media_delete');
             if (deleteBtn.length) {
@@ -2848,77 +3091,22 @@ function addRerollButtonToMessage(mesId) {
                 $this.append(rerollBtn);
             }
         }
-        if (!$this.find('.image-seed-save-button').length) {
-            const seedBtn = `<div title="Save current image seed to AutoPic" class="right_menu_button fa-solid fa-seedling image-seed-save-button interactable" role="button" tabindex="0"></div>`;
-            const rerollBtn = $this.find('.image-reroll-button');
-            const deleteBtn = $this.find('.mes_media_delete');
-            if (rerollBtn.length) {
-                $(seedBtn).insertAfter(rerollBtn);
-            } else if (deleteBtn.length) {
-                $(seedBtn).insertBefore(deleteBtn);
-            } else {
-                $this.append(seedBtn);
-            }
+        if (!$aux.find('.autopic-image-seed-save-button').length) {
+            const old = $this.find('.autopic-image-seed-save-button').detach();
+            $aux.prepend(old.length ? old : '<button type="button" title="시드 저장" aria-label="시드 저장" class="right_menu_button fa-solid fa-seedling autopic-image-seed-save-button interactable"></button>');
         }
+        $aux.find('.autopic-record-clean, .autopic-record-clear').addClass('right_menu_button interactable');
+
     });
 }
 function removeMobileToggleFromMessage(mesId) {
     const $message = $(`.mes[mesid="${mesId}"]`);
-    $message.find('.mobile-ui-toggle').remove();
+    $message.find('.autopic-mobile-ui-toggle').remove();
 }
 
 /**
  * 스와이프 버튼 및 카운터 클릭 시 리롤 모달을 강제로 연결하는 함수
  */
-function attachSwipeRerollListeners(mesId) {
-    const $message = $(`.mes[mesid="${mesId}"]`);
-    
-    const $swipeControls = $message.find('.mes_img_swipe_left, .mes_img_swipe_right, .mes_img_swipe_counter');
-    
-    $swipeControls.off('click.autopic').on('click.autopic', function (e) {
-        scheduleInlineGalleryControlRefresh(mesId);
-
-        const $counter = $message.find('.mes_img_swipe_counter');
-        const counterText = $counter.text().trim(); // 예: "1/1" 또는 "2/3"
-        
-        const parts = counterText.split('/');
-        if (parts.length !== 2) return;
-        
-        const current = parseInt(parts[0]);
-        const total = parseInt(parts[1]);
-        
-        const isLeftArrow = $(this).hasClass('mes_img_swipe_left');
-        const isRightArrow = $(this).hasClass('mes_img_swipe_right');
-        const isCounter = $(this).hasClass('mes_img_swipe_counter');
-
-        let shouldTriggerReroll = false;
-
-        if (isCounter) {
-            shouldTriggerReroll = true;
-        } 
-        else if (isLeftArrow && current === 1) {
-            shouldTriggerReroll = true;
-        } 
-        else if (isRightArrow && current === total) {
-            shouldTriggerReroll = true;
-        }
-
-        if (shouldTriggerReroll) {
-            e.preventDefault();
-            e.stopPropagation();
-
-            if (isCounter && openCurrentTextSwipeRerollIfAvailable(mesId)) return;
-            
-            let $visibleImg = $message.find('.mes_img_container:not([style*="display: none"]) img.mes_img');
-            if ($visibleImg.length === 0) $visibleImg = $message.find('img.mes_img').first();
-            
-            const imgTitle = $visibleImg.attr('title') || $visibleImg.attr('alt') || "";
-            
-            handleReroll(mesId, imgTitle, null, $visibleImg.attr('src') || '', current - 1);
-        }
-
-    });
-}
 
 function stripAutopicRuntimeMarkup(text) {
     const temp = document.createElement('div');
@@ -2972,7 +3160,7 @@ ${targetText}
 }
 
 async function handleManualGenerate(mesId) {
-    if (!SlashCommandParser.commands['sd']) {
+    if (!isDirect(getNaiParams()) && !SlashCommandParser.commands['sd']) {
         toastr.error("Stable Diffusion extension not loaded.");
         return;
     }
@@ -2983,20 +3171,16 @@ async function handleManualGenerate(mesId) {
     const manual = getManualParams();
 
     if (!message || message.is_user) return;
-    if (!manual.profileId) {
-        toastr.warning('AutoPic 설정에서 수동 생성용 Connection Profile을 선택해 주세요.');
-        return;
-    }
 
     try {
         toastr.info('AutoPic 수동 생성 프롬프트 작성 중...');
-        const response = await ConnectionManagerRequestService.sendRequest(
-            manual.profileId,
-            buildManualAutopicPrompt(numericMesId),
-            Number(manual.maxTokens) || MANUAL_DEFAULTS.maxTokens,
-            { extractData: true, includePreset: true, includeInstruct: true, stream: false },
-        );
-        const generatedText = String(response?.content || '').trim();
+        const generatedText = await requestManualPrompt({
+            profileId: manual.profileId,
+            prompt: buildManualAutopicPrompt(numericMesId),
+            maxTokens: Number(manual.maxTokens) || MANUAL_DEFAULTS.maxTokens,
+            generateQuietPrompt,
+            profileService: ConnectionManagerRequestService,
+        });
         const prepared = preparePromptForGeneration(generatedText);
 
         if (!prepared.naiPayload) {
@@ -3006,6 +3190,13 @@ async function handleManualGenerate(mesId) {
         }
 
         toastr.info('AutoPic 이미지 생성 중...');
+        if (useImageSlots()) {
+            const slot = reserveSlot(message, null, prepared.editText || prepared.prompt);
+            updateMessageBlock(numericMesId, message);
+            await context.saveChat();
+            await generateImageSlot(context, message, slot, prepared);
+            return;
+        }
         const resultUrl = await sdCallWithRescale(
             { quiet: 'true' },
             prepared.prompt,
@@ -3018,25 +3209,27 @@ async function handleManualGenerate(mesId) {
         }
 
         if (!message.extra) message.extra = {};
-        if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
+        if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [...gallerySources(message)];
         if (!Array.isArray(message.extra.autopic_swipe_payloads)) message.extra.autopic_swipe_payloads = [];
 
-        const storedPayload = buildStoredAutopicPayload(prepared);
+        const storedPayload = buildStoredAutopicPayload(prepared, message, resultUrl);
         message.extra.autopic_last_payload = storedPayload;
 
         const currentInsertType = extension_settings[extensionName].insertType;
         if (currentInsertType === INSERT_TYPE.REPLACE) {
             const titleForTag = prepared.editText || prepared.prompt || '';
-            const newTag = createAutopicImageTag(resultUrl, titleForTag, 'manual');
+            const newTag = createAutopicImageTag(resultUrl, titleForTag, 'manual', message);
             message.mes = replaceFirstAutopicImageOrAppend(message.mes, newTag);
+            if (Array.isArray(message.swipes)) message.swipes[getCurrentTextSwipeId(message)] = message.mes;
         } else {
             message.extra.image_swipes.push(resultUrl);
             message.extra.autopic_swipe_payloads.push(storedPayload);
             message.extra.image = resultUrl;
-            message.extra.title = prepared.editText;
+            message.extra.title = isDirect(getNaiParams()) ? 'AutoPic' : prepared.editText;
             message.extra.inline_image = true;
         }
 
+        if (currentInsertType !== INSERT_TYPE.REPLACE) syncGalleryMedia(message, resultUrl, null, ST_MEDIA);
         updateMessageBlock(numericMesId, message);
         appendMediaToMessage(message, $(`.mes[mesid="${numericMesId}"]`));
         if (currentInsertType !== INSERT_TYPE.REPLACE) {
@@ -3044,6 +3237,7 @@ async function handleManualGenerate(mesId) {
             addRerollButtonToMessage(numericMesId);
             scheduleInlineGalleryControlRefresh(numericMesId, [0, 50, 150, 350]);
         }
+        cleanMessageImageRecords(message);
         await context.saveChat();
         await eventSource.emit(event_types.MESSAGE_UPDATED, numericMesId);
         await eventSource.emit(event_types.MESSAGE_RENDERED, numericMesId);
@@ -3051,15 +3245,15 @@ async function handleManualGenerate(mesId) {
         toastr.success('AutoPic 수동 이미지 생성 완료.');
     } catch (error) {
         console.error('[AutoPic] Manual generation failed:', error);
-        toastr.error('AutoPic 수동 생성 중 오류가 발생했습니다.');
+        toastr.error(error?.message || 'AutoPic 수동 생성 중 오류가 발생했습니다.');
     }
 }
 
-async function handleReroll(mesId, currentPrompt, targetAutopicId = null, targetImageSrc = null, targetSwipeIdxHint = null, targetTextSwipeIdHint = null) {
+async function handleReroll(mesId, currentPrompt, targetAutopicId = null, targetImageSrc = null, targetSwipeIdxHint = null, targetTextSwipeIdHint = null, targetSlotId = null) {
     currentPrompt = decodeHtmlAttribute(String(currentPrompt ?? ''));
     targetAutopicId = decodeHtmlAttribute(String(targetAutopicId ?? ''));
     targetImageSrc = decodeHtmlAttribute(String(targetImageSrc ?? ''));
-    if (!SlashCommandParser.commands['sd']) {
+    if (!isDirect(getNaiParams()) && !SlashCommandParser.commands['sd']) {
         toastr.error("Stable Diffusion extension not loaded.");
         return;
     }
@@ -3067,6 +3261,11 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
     const context = getContext();
     const message = context.chat[mesId];
     if (!message) return;
+    targetSlotId ??= /^slot-([a-zA-Z0-9-]+)$/.exec(targetAutopicId)?.[1] || null;
+    if (!targetSlotId) {
+        recoverGalleryRecords(message);
+        migrateImageRecords(message);
+    }
 
     const insertType = extension_settings[extensionName].insertType;
     const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/gi;
@@ -3078,8 +3277,17 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
         : [];
     
     let foundItems = [];
+    const sourceRecord = targetSlotId ? slotRecord(message, targetSlotId) : targetImageSrc && imageRecord(message, targetImageSrc);
+    if (targetSlotId && !sourceRecord?.editText) { toastr.warning('이 슬롯의 생성 원문이 없습니다.'); return; }
+    if (sourceRecord) {
+        const prepared = preparePromptForGeneration(sourceRecord.editText);
+        const tag = getAutopicImageTagById(message.mes, targetAutopicId) || getAutopicImageTagBySrc(message.mes, targetImageSrc);
+        foundItems.push({ slotId: targetSlotId, originalTag: tag, prompt: prepared.editText, _parsedNaiPayload: prepared.naiPayload,
+            _parsedPrompt: prepared.prompt, targetImageSrc, targetAutopicId, preventGlobalFallback: true,
+            type: targetSlotId || tag ? 'tag' : 'swipe', swipeIdx: (() => { const i = gallerySources(message).findIndex(src => imageKey(src) === imageKey(targetImageSrc)); return i >= 0 ? i : undefined; })() });
+    }
 
-    if (textSwipePayloads.length > 0) {
+    if (!sourceRecord && textSwipePayloads.length > 0) {
         textSwipePayloads.forEach((savedPayload, idx) => {
             let resolvedNaiPayload = savedPayload?.naiPayload || null;
             let resolvedPrompt = resolvedNaiPayload?.prompt || '';
@@ -3111,11 +3319,11 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
 
     const clickedImageTag = getAutopicImageTagById(message.mes, targetAutopicId)
         || getAutopicImageTagBySrc(message.mes, targetImageSrc);
-    if (clickedImageTag) {
+    if (clickedImageTag && !foundItems.length) {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = clickedImageTag;
         const imgEl = tempDiv.querySelector('img');
-        const prompt = imgEl ? (imgEl.getAttribute('title') || imgEl.getAttribute('alt') || currentPrompt || '') : currentPrompt;
+        const prompt = getAutopicImagePrompt(message, imgEl) || currentPrompt;
         const prepared = preparePromptForGeneration(prompt);
 
         foundItems.push({
@@ -3173,13 +3381,13 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
     }
 
     // 2. 본문 내 <img> 태그 검색 (이미 치환된 경우)
-    let imgMatches = clickedImageTag || hasTargetImageSrc ? [] : [...message.mes.matchAll(imgRegex)];
+    let imgMatches = foundItems.length || clickedImageTag || hasTargetImageSrc ? [] : [...message.mes.matchAll(imgRegex)];
     imgMatches.forEach(m => {
         const fullTag = m[0];
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = fullTag;
         const imgEl = tempDiv.querySelector('img');
-        const prompt = imgEl ? (imgEl.getAttribute('title') || imgEl.getAttribute('alt') || '') : '';
+        const prompt = getAutopicImagePrompt(message, imgEl);
         
         if (prompt) {
             if (!foundItems.some(item => item.originalTag === fullTag)) {
@@ -3205,9 +3413,7 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
     const savedSwipePayloads = Array.isArray(message.extra?.autopic_swipe_payloads)
         ? message.extra.autopic_swipe_payloads
         : [];
-    const imageSwipes = Array.isArray(message.extra?.image_swipes)
-        ? message.extra.image_swipes
-        : [];
+    const imageSwipes = gallerySources(message);
     const swipeCandidateCount = Math.max(imageSwipes.length, savedSwipePayloads.length);
     const normalizedTargetImageSrc = normalizeImageSwipeSrc(targetImageSrc);
     const hintedSwipeIdx = Number(targetSwipeIdxHint);
@@ -3217,23 +3423,24 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
     const targetSwipeIdxFromSrc = normalizedTargetImageSrc
         ? imageSwipes.findIndex(src => normalizeImageSwipeSrc(src) === normalizedTargetImageSrc)
         : -1;
-    const targetSwipeIdx = targetSwipeIdxFromHint !== -1 ? targetSwipeIdxFromHint : targetSwipeIdxFromSrc;
+    const targetSwipeIdx = targetSwipeIdxFromSrc !== -1 ? targetSwipeIdxFromSrc : targetSwipeIdxFromHint;
     const swipeCandidateIndexes = targetSwipeIdx !== -1
         ? [targetSwipeIdx]
         : hasTargetImageSrc
         ? []
         : Array.from({ length: swipeCandidateCount }, (_, index) => index);
 
-    if (shouldIncludeSwipeCandidates && message.extra && swipeCandidateCount > 0) {
+    if (!sourceRecord && shouldIncludeSwipeCandidates && message.extra && swipeCandidateCount > 0) {
         const structuredSource = foundItems.find(i => i._parsedNaiPayload);
         for (const sIdx of swipeCandidateIndexes) {
             const src = imageSwipes[sIdx] || '';
-            const savedPayload = savedSwipePayloads[sIdx] || null;
+            const savedPayload = imageRecord(message, src) || resolveRecord(message, savedSwipePayloads[sIdx]) || null;
             const isTargetedSwipeWithoutPayload = targetSwipeIdx !== -1 && !savedPayload;
 
             let resolvedNaiPayload = null;
             let resolvedPrompt = message.extra.title || currentPrompt || "";
-            let resolvedEditText = message.extra.title || currentPrompt || "";
+            let resolvedEditText = savedPayload?.editText || currentPrompt || '';
+            if (savedPayload?.editText) resolvedPrompt = savedPayload.editText;
 
             if (!resolvedNaiPayload && savedPayload?.rawAutopicTag) {
                 // rawAutopicTag를 현재 캐릭터 등록 정보로 새로 파싱 (태그 변경 반영)
@@ -3319,33 +3526,24 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
     });
     popupHtml += `</div>`;
 
-    $(document).on('change', '.reroll_radio', function() {
+    $(document).on('change.autopicPopup', '.reroll_radio', function() {
         selectedIdx = parseInt($(this).val());
     });
-    $(document).on('input', '.reroll_textarea', function() {
+    $(document).on('input.autopicPopup', '.reroll_textarea', function() {
         const idx = $(this).data('idx');
         editedPrompts[idx] = $(this).val();
     });
 
     const result = await callGenericPopup(popupHtml, POPUP_TYPE.CONFIRM, '', { okButton: 'Generate', cancelButton: 'Cancel' });
 
-    $(document).off('change', '.reroll_radio');
-    $(document).off('input', '.reroll_textarea');
+    $(document).off('change.autopicPopup', '.reroll_radio');
+    $(document).off('input.autopicPopup', '.reroll_textarea');
 
     if (result) {
         const finalPrompt = editedPrompts[selectedIdx];
 		const targetItem = foundItems[selectedIdx];
 		const reparsedFinalPrompt = resolveRerollGenerationPrompt(finalPrompt, targetItem, message, currentPrompt);
-		// message.mes에서 직접 파싱한 naiPayload가 있으면 재파싱 없이 사용
-		let generationPrompt = reparsedFinalPrompt.naiPayload
-			? reparsedFinalPrompt
-			: targetItem._parsedNaiPayload
-			? {
-				prompt: targetItem._parsedPrompt || finalPrompt,
-				naiPayload: targetItem._parsedNaiPayload,
-				editText: finalPrompt,
-			}
-			: reparsedFinalPrompt;
+        let generationPrompt = reparsedFinalPrompt;
 
 		if (!generationPrompt.naiPayload && /<autopic\b/i.test(decodeHtmlAttribute(generationPrompt.prompt))) {
 			const repairedPrompt = preparePromptForGeneration(generationPrompt.prompt);
@@ -3360,6 +3558,10 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
 
             try {
                 toastr.info("이미지 생성 중...");
+                if (targetItem.slotId) {
+                    await generateImageSlot(context, message, { id: targetItem.slotId, record: sourceRecord }, generationPrompt);
+                    return;
+                }
                 const resultUrl = await sdCallWithRescale(
                     { quiet: 'true' },
                     generationPrompt.prompt,
@@ -3375,9 +3577,9 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
 
                     if (currentInsertType === INSERT_TYPE.REPLACE) {
                         // 다음 재생성에서도 구조 전체를 복원할 수 있도록
-                        // editText(<pic>...</pic> 원본)를 title에 보존한다
+                        // 원본 프롬프트는 message.extra에 보존한다
                         const titleForTag = generationPrompt.editText || generationPrompt.prompt || '';
-                        const newTag = createAutopicImageTag(resultUrl, titleForTag, 'tag');
+                        const newTag = createAutopicImageTag(resultUrl, titleForTag, 'tag', message);
                         message.mes = targetItem.originalTag
                             ? replaceExactAutopicTargetOrAppend(message.mes, targetItem.originalTag, newTag)
                             : replaceFirstAutopicImageOrAppend(message.mes, newTag);
@@ -3385,26 +3587,15 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
 
                     else {
                         if (!message.extra) message.extra = {};
-        if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
-                        
-                        if (targetItem.swipeIdx !== undefined) {
-                            message.extra.image_swipes[targetItem.swipeIdx] = resultUrl;
-                        } else if (targetImageSrc) {
-                            const targetSwipeIdx = message.extra.image_swipes.findIndex(src => src === targetImageSrc);
-                            if (targetSwipeIdx !== -1) {
-                                message.extra.image_swipes[targetSwipeIdx] = resultUrl;
-                                targetItem.swipeIdx = targetSwipeIdx;
-                            } else {
-                                message.extra.image_swipes.push(resultUrl);
-                            }
-                        } else {
+                        // A gallery reroll adds a page; only tag replacement replaces an image.
+                        // Do not write ST's legacy aliases when modern media is active.
+                        if (!ST_MEDIA.MEDIA_TYPE?.IMAGE) {
+                            if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [...gallerySources(message)];
                             message.extra.image_swipes.push(resultUrl);
                         }
-                        if (!Array.isArray(message.extra.autopic_swipe_payloads)) message.extra.autopic_swipe_payloads = [];
-                        const storedPayload = buildStoredAutopicPayload(generationPrompt);
-                        if (targetItem.swipeIdx !== undefined) {
-                            message.extra.autopic_swipe_payloads[targetItem.swipeIdx] = storedPayload;
-                        } else {
+                        const storedPayload = buildStoredAutopicPayload(generationPrompt, message, resultUrl);
+                        if (!ST_MEDIA.MEDIA_TYPE?.IMAGE) {
+                            if (!Array.isArray(message.extra.autopic_swipe_payloads)) message.extra.autopic_swipe_payloads = [];
                             message.extra.autopic_swipe_payloads.push(storedPayload);
                         }
                         if (Number.isInteger(targetItem.textSwipeId) && Number.isInteger(targetItem.textSwipePromptIdx)) {
@@ -3415,7 +3606,7 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
                             if (!Array.isArray(message.extra.autopic_text_swipe_payloads[key])) {
                                 message.extra.autopic_text_swipe_payloads[key] = [];
                             }
-                            message.extra.autopic_text_swipe_payloads[key][targetItem.textSwipePromptIdx] = storedPayload;
+                            message.extra.autopic_text_swipe_payloads[key].push(storedPayload);
                             if (!message.extra.autopic_text_swipe_payloads_by_hash || typeof message.extra.autopic_text_swipe_payloads_by_hash !== 'object') {
                                 message.extra.autopic_text_swipe_payloads_by_hash = {};
                             }
@@ -3423,11 +3614,13 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
                             message.extra.autopic_text_swipe_payloads_by_hash[hash] = message.extra.autopic_text_swipe_payloads[key];
                         }
                         message.extra.autopic_last_payload = storedPayload;
-                        message.extra.image = resultUrl;
-                        message.extra.title = generationPrompt.editText;
+                        if (!ST_MEDIA.MEDIA_TYPE?.IMAGE) message.extra.image = resultUrl;
+                        message.extra.title = isDirect(getNaiParams()) ? 'AutoPic' : generationPrompt.editText;
                         message.extra.inline_image = true;
                     }
 
+                    if (currentInsertType === INSERT_TYPE.REPLACE && Array.isArray(message.swipes)) message.swipes[getCurrentTextSwipeId(message)] = message.mes;
+                    if (currentInsertType !== INSERT_TYPE.REPLACE) syncGalleryMedia(message, resultUrl, null, ST_MEDIA);
                     updateMessageBlock(mesId, message);
                     if (currentInsertType === INSERT_TYPE.REPLACE) {
                         scheduleMessageScrollRestore(scrollState);
@@ -3438,7 +3631,8 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
                         addRerollButtonToMessage(mesId);
                         scheduleInlineGalleryControlRefresh(mesId, [0, 50, 150, 350]);
                     }
-                    await context.saveChat();
+                    cleanMessageImageRecords(message);
+        await context.saveChat();
                     
                     await eventSource.emit(event_types.MESSAGE_UPDATED, mesId);
                     await eventSource.emit(event_types.MESSAGE_RENDERED, mesId);
@@ -3446,13 +3640,13 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
                         scheduleMessageScrollRestore(scrollState);
                     }
                     
-                    toastr.success("이미지가 교체되었습니다.");
+                    toastr.success(currentInsertType === INSERT_TYPE.REPLACE ? "이미지가 교체되었습니다." : "새 이미지 페이지가 추가되었습니다.");
                 } else {
                     toastr.error("생성 실패: SD 익스텐션 응답 확인 필요");
                 }
             } catch (e) { 
                 console.error(e);
-                toastr.error("이미지 생성 중 오류 발생."); 
+                toastr.error(e?.message || '이미지 생성 중 오류 발생.');
             }
         }
     }
@@ -3465,6 +3659,18 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
  * 여기서는 별도 처리가 필요 없다.
  */
 async function sdCallWithRescale(args, prompt, naiPayload = null) {
+    if (isDirect(getNaiParams())) {
+        // Structured requests own their character list. Plain/old pic inputs still need
+        // the library which the legacy interceptor used to inject automatically.
+        const payload = naiPayload ?? preparePromptForGeneration(prompt).naiPayload ?? {
+            prompt, characterPrompts: getCurrentAutopicCharacterPromptsForNai(),
+        };
+        return generateDirect({
+            nai: getNaiParams(), prompt, payload, library: getCurrentAutopicCharacterPromptsForNai(), context: getContext(),
+            getHeaders: getRequestHeaders, saveImage: saveBase64AsFile,
+            letterbox: letterboxToReferenceCanvas,
+        });
+    }
     const previousPendingNaiPayload = pendingNaiPayload;
     pendingNaiPayload = naiPayload;
 
@@ -3477,16 +3683,9 @@ async function sdCallWithRescale(args, prompt, naiPayload = null) {
 
 function preparePromptForGeneration(promptText) {
     const text = decodeHtmlAttribute(String(promptText ?? '')).trim();
-    const structuredRequests = getStructuredRequestsFromText(text);
-
-    if (structuredRequests.length > 0) {
-        const request = structuredRequests[0];
-        return {
-            prompt: request.prompt,
-            naiPayload: request.naiPayload,
-            editText: request.editText,
-        };
-    }
+    const parsed = parseAutopic(text, getCurrentAutopicCharacterPromptsForNai(), decodeHtmlAttribute);
+    if (parsed) return {prompt: parsed.prompt, naiPayload: parsed, editText: text};
+    if (text === 'AutoPic') throw new Error('이미지 생성 원문을 찾지 못했습니다.');
 
     return {
         prompt: text,
@@ -3496,65 +3695,18 @@ function preparePromptForGeneration(promptText) {
 }
 
 function resolveRerollGenerationPrompt(finalPrompt, targetItem, message, currentPrompt) {
-    const candidates = [
-        finalPrompt,
-        targetItem?.prompt,
-        targetItem?._savedPayload?.rawAutopicTag,
-        targetItem?._savedPayload?.editText,
-        currentPrompt,
-    ];
-
-    if (!targetItem?.preventGlobalFallback) {
-        candidates.push(
-            message?.extra?.autopic_last_payload?.rawAutopicTag,
-            message?.extra?.autopic_last_payload?.editText,
-            message?.extra?.title,
-            message?.mes,
-        );
-    }
-
-    for (const candidate of candidates) {
-        const prepared = preparePromptForGeneration(candidate);
-        if (prepared.naiPayload) {
-            return prepared;
-        }
-    }
-
-    if (targetItem?._parsedNaiPayload) {
-        return {
-            prompt: targetItem._parsedPrompt || finalPrompt,
-            naiPayload: targetItem._parsedNaiPayload,
-            editText: finalPrompt,
-        };
-    }
-
-    if (targetItem?._savedPayload?.naiPayload) {
-        return {
-            prompt: targetItem._savedPayload.naiPayload.prompt || finalPrompt,
-            naiPayload: targetItem._savedPayload.naiPayload,
-            editText: targetItem._savedPayload.editText || finalPrompt,
-        };
-    }
-
     return preparePromptForGeneration(finalPrompt);
 }
 
-function buildStoredAutopicPayload(generationPrompt) {
-    const editText = generationPrompt?.editText || generationPrompt?.prompt || '';
-    const structuredRequests = getStructuredRequestsFromText(editText);
-    const rawAutopicTag = structuredRequests.length > 0 ? structuredRequests[0].fullTag : null;
-
-    return {
-        editText,
-        rawAutopicTag,
-        naiPayload: generationPrompt?.naiPayload || structuredRequests[0]?.naiPayload || null,
-    };
+function buildStoredAutopicPayload(generationPrompt, message, src) {
+    return rememberImage(message, src, generationPrompt?.editText || generationPrompt?.prompt || '');
 }
 
 function applyTheme(theme) {
     const container = $('#autopic_settings_container');
     if (!container.length) return;
     
+    if (container.hasClass(`theme-${theme}`)) return;
     container.removeClass('theme-dark theme-light theme-pink');
     container.addClass(`theme-${theme}`);
 }
@@ -3573,8 +3725,21 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
         regex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/g;
     }
 
-    const picRequests = extractPicRequests(message.mes, regex);
+    const picRequests = extractPicRequests(stripAutopicImagesForStructuredScan(message.mes), regex);
     if (picRequests.length === 0) return;
+
+    if (useImageSlots()) {
+        // Reserve synchronously, before CHARACTER_MESSAGE_RENDERED starts translation.
+        const work = picRequests.map(request => ({ request, slot: reserveSlot(message, request.fullTag, request.editText || request.prompt) })).filter(item => item.slot);
+        updateMessageBlock(context.chat.indexOf(message), message);
+        void (async () => {
+            try {
+                await context.saveChat();
+                for (const { slot, request } of work) await generateImageSlot(context, message, slot, request);
+            } catch (error) { toastr.error(error?.message || 'AutoPic 이미지 생성 실패'); }
+        })();
+        return;
+    }
 
     setTimeout(async () => {
         try {
@@ -3587,7 +3752,7 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
             toastr.info(`${total}개의 이미지 생성을 시작합니다...`, "AutoPic", { "progressBar": true });
             
             if (!message.extra) message.extra = {};
-            if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [];
+            if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [...gallerySources(message)];
             
             const messageElement = $(`.mes[mesid="${currentIdx}"]`);
             let hasChanged = false;
@@ -3596,6 +3761,7 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
             let updatedMes = message.mes;
             const textSwipeId = getCurrentTextSwipeId(message);
             const currentTextSwipePayloads = [];
+            const newGalleryImages = [];
 
             for (let i = 0; i < picRequests.length; i++) {
                 toastr.info(`이미지 생성 중... (${i + 1} / ${total})`, "AutoPic", { "timeOut": 2000 });
@@ -3621,13 +3787,14 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
 						editText,
 						prompt,
 						naiPayload: request.naiPayload,
-					});
+					}, message, result);
 					message.extra.autopic_swipe_payloads.push(storedPayload);
 					currentTextSwipePayloads.push(storedPayload);
+                    newGalleryImages.push(result);
 					updatedMes = replaceOrAppendAutopicTag(updatedMes, fullTag, '').trim();
 				}
 				else if (insertType === INSERT_TYPE.REPLACE) {
-					const newTag = createAutopicImageTag(result, editText, `tag-${i}`);
+					const newTag = createAutopicImageTag(result, editText, `tag-${i}`, message);
 					updatedMes = replaceOrAppendAutopicTag(updatedMes, fullTag, newTag);
 				}
                 } else {
@@ -3636,7 +3803,7 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
             }
 
             if (hasChanged) {
-				message.extra.title = lastPromptUsed;
+				message.extra.title = isDirect(getNaiParams()) ? 'AutoPic' : lastPromptUsed;
 				if (Array.isArray(message.extra.autopic_swipe_payloads) && message.extra.autopic_swipe_payloads.length > 0) {
 					const last = message.extra.autopic_swipe_payloads[message.extra.autopic_swipe_payloads.length - 1];
 					message.extra.autopic_last_payload = last;
@@ -3657,14 +3824,17 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
                     message.extra.autopic_text_swipe_payloads_by_hash[getAutopicTextSwipeHash(message, textSwipeId)] = currentTextSwipePayloads;
                     message.extra.image = lastImageResult; 
                     message.extra.inline_image = true;
+                    for (const src of newGalleryImages) syncGalleryMedia(message, src, null, ST_MEDIA);
                     appendMediaToMessage(message, messageElement);
                 } 
                 else if (insertType === INSERT_TYPE.REPLACE) {
                     message.mes = updatedMes;
+                    if (Array.isArray(message.swipes)) message.swipes[textSwipeId] = updatedMes;
                 }
                 
                 updateMessageBlock(currentIdx, message);
-                await context.saveChat();
+                cleanMessageImageRecords(message);
+        await context.saveChat();
                 
                 await eventSource.emit(event_types.MESSAGE_UPDATED, currentIdx);
                 await eventSource.emit(event_types.MESSAGE_RENDERED, currentIdx);
@@ -3673,7 +3843,7 @@ eventSource.on(event_types.MESSAGE_RECEIVED, async () => {
             }
         } catch (e) { 
             console.error("[AutoPic] 오류:", e); 
-            toastr.error("이미지 생성 과정에서 오류가 발생했습니다.");
+            toastr.error(e?.message || '이미지 생성 과정에서 오류가 발생했습니다.');
         }
     }, 200);
 });
@@ -3692,14 +3862,10 @@ async function attachTagControls(mesId) {
         if ($img.parent().hasClass('autopic-tag-img-wrapper')) return;
         
         const src = $img.attr('src') || "";
-        const title = $img.attr('title') || "";
+        const title = getAutopicImagePrompt(message, this);
         const hasAutopicId = $img.attr('data-autopic-id');
 
-        const isAutopicImg = hasAutopicId || 
-                             (title && (title.includes('Character') || 
-                                        title.includes('indoors') || 
-                                        title.includes('outdoors') ||
-                                        title.split(',').length > 3)); 
+        const isAutopicImg = hasAutopicId || !!imageRecord(message, src); 
 
         if (isAutopicImg && src) {
             if (!hasAutopicId) {
@@ -3707,18 +3873,20 @@ async function attachTagControls(mesId) {
             }
             const autopicId = $img.attr('data-autopic-id') || "";
 
-            $img.wrap('<div class="autopic-tag-img-wrapper"></div>');
+            const element = this.hasAttribute('data-autopic-slot') ? 'span' : 'div';
+            $img.wrap(`<${element} class="autopic-tag-img-wrapper"></${element}>`);
             
-            const $controls = $('<div class="autopic-tag-controls"></div>');
-            const $btn = $('<div class="autopic-control-btn reroll-trigger fa-solid fa-rotate interactable" title="Generate Another Image" role="button" tabindex="0"></div>');
-            const $seedBtn = $('<div class="autopic-control-btn autopic-save-seed-trigger fa-solid fa-seedling interactable" title="Save current image seed to AutoPic" role="button" tabindex="0"></div>');
+            const $controls = $(`<${element} class="autopic-tag-controls"></${element}>`);
+            const $btn = $(`<${element} class="autopic-control-btn reroll-trigger fa-solid fa-rotate interactable" title="Generate Another Image" role="button" tabindex="0"></${element}>`);
+            const $seedBtn = $('<button type="button" class="autopic-save-seed-trigger fa-solid fa-seedling interactable" title="시드 저장" aria-label="시드 저장"></button>');
             $btn.attr('data-mesid', mesId);
             $btn.attr('data-prompt', title);
             $btn.attr('data-autopic-id', autopicId);
             $btn.attr('data-image-src', src);
             $seedBtn.attr('data-image-src', src);
-            $controls.append($btn, $seedBtn);
-            $img.after($controls);
+            $controls.append($btn);
+            const $aux = $(`<${element} class="autopic-aux-controls autopic-aux-tag"></${element}>`).append($seedBtn, imageManagementButtons(mesId));
+            $img.after($controls, $aux);
         }
     });
 }
@@ -3753,7 +3921,7 @@ eventSource.on(event_types.CHAT_CHANGED, () => {
     initializeAllAutopicMessageControls();
 });
 
-$(document).off('click', '.reroll-trigger').on('click', '.reroll-trigger', function(e) {
+$(document).off('click.autopicTag', '.reroll-trigger').on('click.autopicTag', '.reroll-trigger', function(e) {
     e.preventDefault(); 
     e.stopImmediatePropagation();
     const mesId = $(this).data('mesid');

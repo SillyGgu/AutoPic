@@ -1,0 +1,183 @@
+/* AutoPic's theme tokens, existing Font Awesome icons, and native form controls. */
+#autopic_settings_container .ap-studio {
+    container-type: inline-size;
+    padding: 22px;
+    color: var(--ap-text);
+    opacity: 1 !important;
+    --ap-soft-accent: color-mix(in srgb, var(--ap-accent) 12%, var(--ap-bg-card));
+}
+#autopic_settings_container .ap-studio [hidden] { display: none !important; }
+#autopic_settings_container .ap-studio * { box-sizing: border-box; }
+#autopic_settings_container .ap-studio button { font: inherit; }
+#autopic_settings_container .ap-studio-header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+#autopic_settings_container .ap-heading-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; background: var(--ap-soft-accent); color: var(--ap-accent); font-size: 18px; }
+#autopic_settings_container .ap-eyebrow { display: block; color: var(--ap-text-vague); font-size: 10px; font-weight: 700; letter-spacing: .15em; margin-bottom: 4px; }
+#autopic_settings_container .ap-studio-header h3 { font-size: 18px; margin: 0; line-height: 1.3; color: var(--ap-text); }
+#autopic_settings_container .ap-badge { margin-left: auto; border-radius: 6px; background: var(--ap-soft-accent); color: var(--ap-accent); border: 1px solid color-mix(in srgb, var(--ap-accent) 25%, transparent); padding: 5px 8px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+#autopic_settings_container .ap-model-field { display: grid; gap: 8px; margin-bottom: 16px; }
+#autopic_settings_container .ap-model-field > label, #autopic_settings_container .ap-field { font-size: 12px; font-weight: 600; }
+#autopic_settings_container .ap-studio .gen-custom-input { width: 100%; min-width: 0; min-height: 40px; font-size: 13px !important; font-variant-numeric: tabular-nums; }
+#autopic_settings_container .ap-studio select.gen-custom-input { appearance: auto !important; -webkit-appearance: auto !important; background-image: none !important; padding-right: 12px !important; }
+#autopic_settings_container .ap-studio textarea { resize: vertical; line-height: 1.6; }
+#autopic_settings_container .ap-studio :is(button, input, select, textarea, summary):focus-visible { outline: 2px solid var(--ap-accent) !important; outline-offset: 3px; }
+#autopic_settings_container .ap-import-bar { display: flex; align-items: center; gap: 12px; border: 1px dashed var(--ap-input-border); border-radius: 10px; padding: 14px; transition: background .15s, border-color .15s; }
+#autopic_settings_container .ap-import-bar.is-dragging { background: var(--ap-soft-accent); border-color: var(--ap-accent); }
+#autopic_settings_container .ap-import-bar[aria-busy=true] { opacity: .65; }
+#autopic_settings_container .ap-import-copy { flex: 1; display: flex; align-items: center; gap: 12px; min-width: 0; }
+#autopic_settings_container .ap-import-copy > i { font-size: 21px; color: var(--ap-accent); }
+#autopic_settings_container .ap-import-copy strong { display: block; font-size: 12px; font-weight: 600; }
+#autopic_settings_container .ap-import-copy small { display: block; font-size: 10px; line-height: 1.5; color: var(--ap-text-vague); margin-top: 4px; }
+#autopic_settings_container .ap-icon-button { display: inline-grid; place-items: center; flex: 0 0 36px; width: 36px; height: 36px; border: 1px solid var(--ap-border); border-radius: 8px; background: var(--ap-bg-input); color: var(--ap-text); cursor: pointer; }
+#autopic_settings_container .ap-icon-button:hover { color: var(--ap-accent); border-color: var(--ap-accent); }
+#autopic_settings_container .ap-icon-button.ap-small { width: 28px; height: 28px; flex-basis: 28px; }
+#autopic_settings_container .ap-capability-line { color: var(--ap-text-vague); font-size: 11px; line-height: 1.6; margin: 12px 0 18px; }
+#autopic_settings_container .ap-panel { padding: 18px; margin: 12px 0; background: var(--ap-bg-input); border: 1px solid var(--ap-border); border-radius: 12px; }
+#autopic_settings_container .ap-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+#autopic_settings_container .ap-section-heading > div { display: flex; align-items: center; gap: 8px; }
+#autopic_settings_container .ap-section-heading h4 { margin: 0; font-size: 13px; font-weight: 650; }
+#autopic_settings_container .ap-section-heading i { color: var(--ap-text-vague); font-size: 12px; }
+#autopic_settings_container .ap-value-label { color: var(--ap-accent); font-size: 11px; font-variant-numeric: tabular-nums; }
+#autopic_settings_container .ap-section-hint { color: var(--ap-text-vague); font-size: 10px; }
+#autopic_settings_container .ap-aspect-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+#autopic_settings_container .ap-aspect-picker button { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 0; padding: 14px 4px; border: 1px solid var(--ap-border); border-radius: 9px; color: var(--ap-text-vague); background: var(--ap-bg-card); cursor: pointer; transition: border-color .15s, background .15s; }
+#autopic_settings_container .ap-aspect-picker button > i { font-size: 22px; line-height: 26px; }
+#autopic_settings_container .ap-aspect-picker button > strong { font-size: 11px; font-weight: 600; color: var(--ap-text); }
+#autopic_settings_container .ap-aspect-picker button > small { font-size: 10px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#autopic_settings_container .ap-aspect-picker button:hover { border-color: var(--ap-accent); }
+#autopic_settings_container .ap-aspect-picker button[aria-pressed=true] { border-color: var(--ap-accent); background: var(--ap-soft-accent); color: var(--ap-accent); box-shadow: inset 0 0 0 1px var(--ap-accent); }
+#autopic_settings_container .ap-custom-resolution { margin-top: 14px; }
+#autopic_settings_container .ap-custom-resolution summary { cursor: pointer; color: var(--ap-text-vague); font-size: 11px; }
+#autopic_settings_container .ap-custom-resolution summary i { margin-right: 5px; }
+#autopic_settings_container .ap-size-fields { display: grid; grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr); gap: 10px; align-items: end; margin-top: 12px; }
+#autopic_settings_container .ap-size-fields button { margin-bottom: 2px; }
+#autopic_settings_container .ap-field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 12px; }
+#autopic_settings_container .ap-field { display: flex; flex-direction: column; gap: 7px; min-width: 0; color: var(--ap-text); }
+#autopic_settings_container .ap-field small, #autopic_settings_container .ap-help { font-size: 11px; line-height: 1.6; color: var(--ap-text-vague); font-weight: 400; }
+#autopic_settings_container .ap-help { margin: 8px 0 0; }
+#autopic_settings_container .ap-feature-row { border-top: 1px solid var(--ap-border); margin-top: 18px; padding-top: 14px; }
+#autopic_settings_container .ap-switch-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 44px; cursor: pointer; }
+#autopic_settings_container .ap-switch-row > span { min-width: 0; }
+#autopic_settings_container .ap-switch-row strong { display: block; font-size: 12px; font-weight: 600; }
+#autopic_settings_container .ap-switch-row strong i { margin-right: 6px; color: var(--ap-text-vague); }
+#autopic_settings_container .ap-switch-row small { display: block; color: var(--ap-text-vague); font-size: 10px; line-height: 1.5; margin-top: 4px; }
+#autopic_settings_container .ap-studio input.ap-toggle { appearance: none; -webkit-appearance: none; display: block; position: relative; width: 36px !important; height: 21px !important; min-width: 36px; min-height: 21px; flex: 0 0 36px; margin: 0; padding: 0; border-radius: 20px !important; border: 1px solid var(--ap-input-border) !important; background: var(--ap-bg-card) !important; cursor: pointer; transition: background .18s, border-color .18s; }
+#autopic_settings_container .ap-studio input.ap-toggle::after { content: ''; position: absolute; width: 13px; height: 13px; left: 3px; top: 3px; border-radius: 50%; background: var(--ap-text-vague); transition: transform .18s; }
+#autopic_settings_container .ap-studio input.ap-toggle:checked { background: var(--ap-accent) !important; border-color: var(--ap-accent) !important; }
+#autopic_settings_container .ap-studio input.ap-toggle:checked::after { transform: translateX(15px); background: #fff; }
+#autopic_settings_container .ap-studio :disabled { opacity: .45; cursor: not-allowed; }
+#autopic_settings_container .ap-foldout { padding: 0; }
+#autopic_settings_container .ap-foldout > summary { list-style: none; display: flex; align-items: center; gap: 10px; cursor: pointer; padding: 16px 18px; font-size: 13px; font-weight: 600; }
+#autopic_settings_container .ap-foldout > summary::-webkit-details-marker { display: none; }
+#autopic_settings_container .ap-foldout > summary > i { color: var(--ap-text-vague); }
+#autopic_settings_container .ap-foldout > summary small { display: block; color: var(--ap-text-vague); font-size: 10px; font-weight: 400; margin-top: 4px; }
+#autopic_settings_container .ap-chevron { margin-left: auto; font-size: 10px; transition: transform .2s; }
+#autopic_settings_container details[open] > summary .ap-chevron { transform: rotate(180deg); }
+#autopic_settings_container .ap-foldout-body { display: grid; gap: 16px; padding: 0 18px 18px; }
+#autopic_settings_container .ap-shared-options { border-top: 1px solid var(--ap-border); margin-top: 22px; padding-top: 20px; }
+#autopic_settings_container .ap-studio .nai-param-nav-container { gap: 4px; padding: 4px; border: 1px solid var(--ap-border); border-radius: 9px; background: var(--ap-bg-input); }
+#autopic_settings_container .ap-studio .nai-param-nav-item { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 11px; border: 0; border-radius: 6px; padding: 9px 5px; background: transparent; }
+#autopic_settings_container .ap-studio .nai-param-nav-item.active { color: var(--ap-text); background: var(--ap-bg-card); box-shadow: 0 1px 4px #00000018; }
+#autopic_settings_container .ap-slider-heading { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 8px; font-size: 12px; }
+#autopic_settings_container .ap-slider-heading output { color: var(--ap-accent); font-size: 12px; font-variant-numeric: tabular-nums; }
+#autopic_settings_container .ap-range { width: 100%; accent-color: var(--ap-accent); }
+#autopic_settings_container .ap-divider { height: 1px; background: var(--ap-border); margin: 18px 0; }
+#autopic_settings_container .ap-seed-field { display: grid; grid-template-columns: 16px minmax(0, 1fr) 36px; align-items: center; gap: 10px; margin-top: 12px; }
+#autopic_settings_container .ap-seed-field > i { color: var(--ap-text-vague); font-size: 13px; }
+#autopic_settings_container .ap-studio-footer { display: flex; align-items: start; gap: 8px; padding-top: 18px; margin-top: 20px; border-top: 1px solid var(--ap-border); color: var(--ap-text-vague); font-size: 10px; line-height: 1.6; }
+#autopic_settings_container .ap-studio-footer > i { margin-top: 3px; }
+#autopic_settings_container .ap-reference-body { margin-top: 14px; }
+#autopic_settings_container .ap-reference-body .ap-field { margin: 14px 0; }
+#autopic_settings_container #nai_vibe_list { display: grid; gap: 10px; margin-bottom: 12px; }
+#autopic_settings_container #nai_ref_preview { margin-bottom: 12px; }
+#autopic_settings_container .ap-upload-button { width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px; border: 1px dashed var(--ap-input-border); border-radius: 8px; background: transparent; color: var(--ap-text-vague); font-size: 12px !important; cursor: pointer; }
+#autopic_settings_container .ap-upload-button:hover { color: var(--ap-accent); border-color: var(--ap-accent); }
+#autopic_settings_container .ap-empty-note { display: flex; gap: 10px; font-size: 12px; line-height: 1.7; color: var(--ap-text-vague); padding: 12px; }
+#autopic_settings_container .ap-empty-note i { margin-top: 4px; }
+#autopic_settings_container .ap-import-preview { border: 1px solid var(--ap-accent); background: var(--ap-soft-accent); border-radius: 10px; padding: 16px; margin: 12px 0; }
+#autopic_settings_container .ap-file-name { margin: 0 0 10px; font-size: 11px; color: var(--ap-text-vague); overflow-wrap: anywhere; }
+#autopic_settings_container .ap-meta-summary { display: flex; gap: 6px; flex-wrap: wrap; }
+#autopic_settings_container .ap-meta-summary span { padding: 5px 8px; background: var(--ap-bg-card); border: 1px solid var(--ap-border); border-radius: 6px; font-size: 10px; }
+#autopic_settings_container .ap-import-choices { display: grid; gap: 12px; margin-top: 18px; }
+#autopic_settings_container .ap-meta-detail { margin-top: 16px; font-size: 11px; }
+#autopic_settings_container .ap-meta-detail summary { cursor: pointer; }
+#autopic_settings_container .ap-meta-detail pre { max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: inherit; padding: 10px; background: var(--ap-bg-input); border-radius: 6px; }
+#autopic_settings_container .ap-notices { padding-left: 16px; font-size: 11px; line-height: 1.6; }
+#autopic_settings_container .ap-notices li + li { margin-top: 5px; }
+#autopic_settings_container .ap-action-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px; }
+#autopic_settings_container .ap-action-row > span { font-size: 10px; color: var(--ap-text-vague); }
+#autopic_settings_container .ap-import-status { font-size: 11px; line-height: 1.6; color: var(--ap-accent); margin: 10px 0; }
+#autopic_settings_container .ap-import-status.is-error { color: #e77f7f; }
+#autopic_settings_container .ap-imported-characters { border-top: 1px solid var(--ap-border); padding-top: 12px; }
+#autopic_settings_container #nai_imported_character_list { display: grid; gap: 12px; margin: 14px 0; }
+@container (max-width: 350px) {
+    #autopic_settings_container .ap-panel { padding: 12px; }
+    #autopic_settings_container .ap-foldout { padding: 0; }
+    #autopic_settings_container .ap-section-hint { display: none; }
+    #autopic_settings_container .ap-aspect-picker { gap: 5px; }
+    #autopic_settings_container .ap-import-copy { gap: 8px; }
+    #autopic_settings_container .ap-import-copy > i { display: none; }
+    #autopic_settings_container .ap-studio .nai-param-nav-item { font-size: 10px; gap: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    #autopic_settings_container .ap-studio * { transition: none !important; animation: none !important; }
+}
+
+/* Bound layout work to the settings card; no filters or scroll listeners. */
+#autopic_settings_container .ap-studio { contain: layout style; }
+#autopic_settings_container .ap-style-presets { padding: 14px; margin-bottom: 16px; border: 1px solid var(--ap-border); border-radius: 10px; background: var(--ap-bg-input); }
+#autopic_settings_container .ap-preset-row { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+#autopic_settings_container .ap-preset-row > :is(input, select) { flex: 1; min-width: 0; }
+#autopic_settings_container .ap-character-position[hidden] { display: none !important; }
+#autopic_settings_container .ap-character-position { border-top: 1px solid var(--ap-border); padding-top: 12px; font-size: 12px; }
+#autopic_settings_container .ap-character-position small { color: var(--ap-text-vague); margin-left: 6px; }
+#autopic_settings_container .ap-coordinate-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 8px; }
+#autopic_settings_container .ap-coordinate-fields label { display: flex; align-items: center; gap: 8px; min-width: 0; }
+#autopic_settings_container .ap-coordinate-fields input { width: 100%; min-width: 0; }
+@media (max-width: 600px) {
+    #autopic_settings_container .ap-studio { padding: 14px; }
+    #autopic_settings_container .ap-icon-button { min-width: 44px; width: 44px; height: 44px; flex-basis: 44px; }
+    #autopic_settings_container .ap-size-fields { grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr); }
+    #autopic_settings_container .ap-studio .gen-custom-input { font-size: 16px !important; min-height: 44px; }
+}
+
+#autopic_settings_container .ap-prompt-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#autopic_settings_container .ap-import-preview { background: var(--ap-bg-input); color: var(--ap-text); }
+#autopic_settings_container .ap-import-choices { padding: 12px; border: 1px solid var(--ap-border); border-radius: 8px; background: var(--ap-bg-item); }
+#autopic_settings_container .ap-import-bar.is-dragging { background: var(--ap-bg-item); }
+#autopic_settings_container .ap-meta-summary span { background: var(--ap-bg-main); }
+
+.autopic-media-owner .autopic-record-clean, .autopic-media-owner .autopic-record-clear,
+.autopic-tag-controls .autopic-record-clean, .autopic-tag-controls .autopic-record-clear {
+    background: transparent; color: inherit; border: 0; padding: 8px; cursor: pointer;
+}
+
+/* Low-frequency actions are separate from the unchanged upper-right reroll. */
+.autopic-tag-img-wrapper > .autopic-aux-controls,
+.autopic-media-owner .mes_media_container > .autopic-aux-controls {
+    position: absolute; top: 0; left: 0; right: auto; display: flex; gap: 4px;
+    z-index: 11; padding: 4px; opacity: 0; pointer-events: none;
+}
+.autopic-tag-img-wrapper:hover > .autopic-aux-controls,
+.autopic-tag-img-wrapper.ui-active > .autopic-aux-controls,
+.autopic-media-owner .mes_media_container:hover > .autopic-aux-controls,
+.autopic-media-owner .mes_media_container.ui-active > .autopic-aux-controls,
+.autopic-aux-controls:focus-within { opacity: 1; pointer-events: auto; }
+.autopic-aux-controls > button {
+    display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
+    padding: 0; margin: 0; border: 0; border-radius: 4px; background: transparent;
+    color: rgba(255,255,255,.95); cursor: pointer; font-size: 15px;
+    text-shadow: 0 1px 3px rgba(0,0,0,.8);
+}
+.autopic-aux-controls > button:hover { color: var(--ap-accent, #4a90e2); }
+.autopic-aux-tag > button { width: 32px; height: 32px; }
+@media (max-width: 600px) { .autopic-aux-controls > button { width: 36px; height: 36px; } }
+
+/* Keep the optional translator integration in one compact, theme-aware card. */
+#autopic_settings_container .autopic-translation-card { display: grid; gap: 10px; }
+#autopic_settings_container .autopic-translation-card .gen-section-title { margin: 0; }
+#autopic_settings_container .autopic-translation-card small,
+#autopic_settings_container #autopic_translation_details { color: var(--ap-text-vague); font-size: .82rem; line-height: 1.5; }
+#autopic_settings_container #autopic_translation_details[hidden] { display: none; }
+#autopic_settings_container #autopic_translation_details p { margin: 0 0 10px; }
+#autopic_settings_container #autopic_convert_slots { width: 100%; white-space: normal; }
+.autopic-image-slot { display: inline-block; max-width: 100%; }
