@@ -1,3 +1,4 @@
+import { createAutopicId } from './id.mjs';
 import { STRUCTURED_BLOCKS_PROMPT, STRICT_TAG_BLOCKS_PROMPT } from './prompt-templates.mjs';
 import { requestManualPrompt } from './manual-prompt.mjs';
 import { slotIds, slotRecord, reserveSlot, writeSlot, renderSlots, clearSlotPrompts, pruneSlots, configureSlotProtection, slotSubscription } from './image-slots.mjs';
@@ -345,7 +346,7 @@ function getAttrValue(attrs, name) {
 }
 
 function createAutopicImageTag(src, title, idPrefix = 'tag', message) {
-    const tagId = `${idPrefix}-${crypto.randomUUID()}`;
+    const tagId = `${idPrefix}-${createAutopicId()}`;
     if (message) {
         rememberImage(message, src, title);
     }

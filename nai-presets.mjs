@@ -1,3 +1,4 @@
+import { createAutopicId } from './id.mjs';
 // Only small, explicitly selected values belong in a style preset. Never store images.
 const fields = ['width', 'height', 'steps', 'scale', 'sampler', 'scheduler', 'quality', 'ucPreset', 'uc_preset', 'prefix', 'negative_prompt', 'dataset', 'transparent', 'variety', 'normalizeVibes'];
 export function styleSnapshot(nai, settings) {
@@ -19,7 +20,7 @@ export function storeStyle(nai, name, snapshot, updateId) {
     if (items.some(p => p !== current && p.model === nai.generationMode && p.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error('같은 이름이 있습니다. 해당 프리셋을 선택해 갱신하세요.');
     if (items.some(p => p !== current && p.model === nai.generationMode && JSON.stringify(p.snapshot) === JSON.stringify(snapshot))) throw new Error('동일한 설정의 프리셋이 이미 있습니다.');
     if (!current && items.length >= 32) throw new Error('프리셋은 두 모델을 합쳐 최대 32개입니다. 사용하지 않는 항목을 삭제해 주세요.');
-    const entry = { id: current?.id || crypto.randomUUID(), model: nai.generationMode, name, snapshot };
+    const entry = { id: current?.id || createAutopicId(), model: nai.generationMode, name, snapshot };
     const next = current ? items.map(p => p === current ? entry : p) : [...items, entry];
     if (JSON.stringify(next).length > 128000) throw new Error('프리셋 저장 한도에 도달했습니다. 긴 프롬프트나 사용하지 않는 항목을 줄여 주세요.');
     nai.stylePresets = next;

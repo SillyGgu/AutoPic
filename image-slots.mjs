@@ -1,3 +1,4 @@
+import { createAutopicId } from './id.mjs';
 // Persist only this safe HTML in mes. Image URLs and generation sources live in extra.
 export const SLOT_PATTERN = '<span class="autopic-image-slot" data-autopic-slot="([a-zA-Z0-9-]+)">\\[AutoPic 이미지\\]</span>';
 export const SLOT_RULE = `/${SLOT_PATTERN}/g`;
@@ -40,7 +41,7 @@ export function writeSlot(message, id, record) {
     return found;
 }
 export function reserveSlot(message, original, editText, src = '') {
-    const id = crypto.randomUUID();
+    const id = createAutopicId();
     const markup = slotMarkup(id);
     if (original && !message.mes.includes(original)) return null;
     message.mes = original ? message.mes.replace(original, () => markup) : `${message.mes}\n\n${markup}`;

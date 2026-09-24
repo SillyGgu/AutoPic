@@ -1,3 +1,4 @@
+import { createAutopicId } from './id.mjs';
 import { parseAutopic, assertNoAutopicTags } from './structured-prompt.mjs';
 import { planMetadataImport, applyMetadataImport, RESOLUTION_PRESETS, resolutionPreset } from './nai-metadata-import.mjs';
 import { bindStylePresets } from './nai-presets.mjs';
@@ -352,7 +353,7 @@ export async function generateDirect({ nai, prompt, payload, library = [], conte
     const base64 = await response.text();
     if (!base64.startsWith('iVBORw0KGgo')) throw new Error('AutoPic 서버에서 올바른 PNG를 받지 못했습니다.');
     const characterName = context.characters?.[context.characterId]?.name || 'AutoPic';
-    return saveImage(base64, characterName, `autopic_${Date.now()}_${crypto.randomUUID()}`, 'png');
+    return saveImage(base64, characterName, `autopic_${Date.now()}_${createAutopicId()}`, 'png');
 }
 
 export function syncCharacterPositionVisibility(nai) {
