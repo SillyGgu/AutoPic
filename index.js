@@ -3051,7 +3051,9 @@ function routeAutopicImageClick(event) {
     const src = control.getAttribute('data-image-src') || control.closest('.mes_media_container')?.querySelector('img')?.getAttribute('src') || selectedGallerySource(message) || image?.getAttribute('src') || '';
     const ownButton = control.matches('.autopic-image-reroll-button, .reroll-trigger');
     const owned = !!imageRecord(message, src) || !!image?.getAttribute('data-autopic-id');
-    if (!ownButton && (!owned || !isDirect(getNaiParams()))) return;
+    const swipeControl = control.matches('.mes_img_swipe_right, .mes_img_swipe_left, .mes_img_swipe_counter');
+    // Owned gallery swipes need the saved source prompt in legacy generation too.
+    if (!ownButton && (!owned || (!swipeControl && !isDirect(getNaiParams())))) return;
     if (control.matches('.mes_img_swipe_right, .mes_img_swipe_left')) {
         const [current, total] = (block.querySelector('.mes_img_swipe_counter')?.textContent || '').split('/').map(Number);
         const sources = gallerySources(message);
