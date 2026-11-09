@@ -97,11 +97,11 @@
                     </select>
                 </div>
                 <div class="flex-container flexnowrap" style="align-items: center; gap: 20px;">
-                    <label for="autopic_manual_max_tokens" style="flex-shrink: 0; min-width: 120px;">최대 토큰</label>
+                    <label for="autopic_manual_max_tokens" style="flex-shrink: 0; min-width: 120px;">삽화당 최대 토큰</label>
                     <input id="autopic_manual_max_tokens" class="gen-custom-input" type="number" min="128" max="4096" step="1" style="width: 100px;">
                 </div>
                 <p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-top: 10px; line-height: 1.5;">
-                    ‘현재 사용 중인 연결’은 ST의 현재 API·모델과 Quiet 생성에 적용되는 채팅 프리셋·컨텍스트를 사용합니다. 별도 Connection Profile도 선택할 수 있습니다. 최대 토큰은 위 설정을 사용하며, 완성된 태그는 기존 이미지 생성 경로로 전송합니다.
+                    버튼을 누르면 장면 요청, 삽화 개수, 자유 배치/하단 배치, 참고 대화를 선택할 수 있습니다. 기본 참고 범위는 선택한 메시지 1개입니다. ‘현재 사용 중인 연결’은 현재 API·모델로 선택한 문맥만 전송합니다. 별도 Connection Profile도 사용할 수 있습니다. 여러 장은 서로 다른 장면으로 작성하며, 전체 출력 토큰 한도는 위 값 × 삽화 개수입니다.
                 </p>
             </div>
 
@@ -254,7 +254,7 @@
 </div>
         <div id="tab-gen-templates" class="image-gen-tab-content">
 			<div class="image-gen-card">
-				<h3 class="gen-section-title">템플릿 관리</h3>
+				<h3 class="gen-section-title">기본 프롬프트 템플릿</h3>
 				<p style="font-size: 0.82rem; color: #ff9f43; margin-top: 9px; margin-bottom: 20px; line-height: 1.4;">
 					<i class="fa-solid fa-circle-info"></i> <b>참고:</b> 수정 후 <b>저장</b> 버튼을 누르면 기존 내용에 덮어씌워집니다. <b>+</b> 버튼은 새 템플릿을 적기 위해 창을 비웁니다.
 				</p>
@@ -284,34 +284,112 @@
 						</span>
 					</div>
 					<textarea id="prompt_injection_text" class="gen-custom-input" rows="10" placeholder="AI에게 이미지 태그 생성을 지시하는 프롬프트를 입력하세요."></textarea>
-					<div id="character_prompts_section" style="margin-top: 25px; border-top: 1px dashed var(--ap-border); padding-top: 20px;">
-						<div id="character_prompts_section" style="margin-top: 25px; border-top: 1px dashed var(--ap-border); padding-top: 20px;">
-							<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-								<label style="font-size:0.85rem; font-weight:bold; color: var(--ap-accent);">👤 캐릭터 외형 프롬프트
-									<span style="font-size: 0.7rem; font-weight: normal; background: var(--ap-accent); color: #fff; border-radius: 4px; padding: 2px 7px; margin-left: 6px; vertical-align: middle;">Structured Block</span>
-								</label>
-								<button id="add_char_prompt_btn" class="gen-btn gen-btn-dark" style="padding: 4px 10px; font-size: 0.75rem;">
-									<i class="fa-solid fa-plus"></i> 추가
-								</button>
-							</div>
-							<p style="font-size: 0.78rem; color: var(--ap-text-vague); margin-bottom: 14px; line-height: 1.5;">
-								등록된 캐릭터는 <code style="background:var(--ap-bg-input); padding: 1px 5px; border-radius: 3px;">&lt;apchar ref="이름"&gt;</code> 으로 불러옵니다. 토글 off 시 해당 캐릭터는 비활성화됩니다.<br>
-								<span style="color: var(--ap-text-vague);">※ <code style="background:var(--ap-bg-input); padding: 1px 5px; border-radius: 3px;">{autopic_charN}</code> 플레이스홀더 방식은 레거시입니다. 구버전 템플릿에서만 동작합니다.</span>
-							</p>
-							<div id="char_prompts_list" style="display: flex; flex-direction: column; gap: 15px;">
-								</div>
-						</div>
-						<div id="char_prompts_list" style="display: flex; flex-direction: column; gap: 15px;">
-							</div>
-						<p style="font-size: 0.75rem; color: var(--ap-text-vague); margin-top: 10px; line-height: 1.4;">
-							* 토글이 켜져 있는 캐릭터의 프롬프트만 {autopic_charN} 위치에 치환되어 들어갑니다. 꺼져 있는 캐릭터는 프롬프트에서 해당 자리가 빈 칸으로 처리되어 AI가 인식하지 못하게 됩니다.
-						</p>
-					</div>
-				</div>
-			</div>
-		</div>
+                </div>
+            </div>
+            <details class="ap-template-disclosure">
+                <summary>옷차림·수동 생성 템플릿</summary>
+                <div class="image-gen-card ap-template-card" id="autopic_outfit_template_card">
+                    <h3 class="gen-section-title">옷차림 프롬프트 템플릿</h3>
+                    <p class="ap-help" id="autopic_outfit_template_help">캐릭터에 등록한 기본 의상을 AI가 장면에 맞게 해석하고 반영하는 지시문입니다. 자동 생성과 수동 생성에 함께 적용됩니다. 기존 템플릿의 의상 관련 지시와 다르면 이 내용을 우선합니다.</p>
+                    <textarea id="autopic_outfit_template" class="gen-custom-input" rows="7" aria-label="옷차림 프롬프트 템플릿" aria-describedby="autopic_outfit_template_help"></textarea>
+                    <div class="ap-template-actions">
+                        <button id="autopic_outfit_template_save" type="button" class="gen-btn gen-btn-dark"><i class="fa-solid fa-save" aria-hidden="true"></i> 저장</button>
+                        <button id="autopic_outfit_template_reset" type="button" class="gen-btn gen-btn-dark">기본 지시문 복원</button>
+                    </div>
+                </div>
+                <div class="image-gen-card ap-template-card">
+                    <h3 class="gen-section-title">수동 생성 전용 지시문</h3>
+                    <p class="ap-help" id="autopic_manual_template_help">수동 생성 버튼에서만 사용합니다. 장면 요청, 개수, 위치, 선택한 대화는 실행할 때 자동으로 덧붙입니다. 자동 생성 템플릿과 별도로 저장됩니다.</p>
+                    <textarea id="autopic_manual_template" class="gen-custom-input" rows="9" aria-label="수동 생성 전용 지시문" aria-describedby="autopic_manual_template_help"></textarea>
+                    <div class="ap-template-actions">
+                        <button id="autopic_manual_template_save" type="button" class="gen-btn gen-btn-dark"><i class="fa-solid fa-save" aria-hidden="true"></i> 저장</button>
+                        <button id="autopic_manual_template_reset" type="button" class="gen-btn gen-btn-dark">기본 지시문 복원</button>
+                    </div>
+                    <div class="ap-template-field ap-manual-preset" id="autopic_manual_preset">
+                        <label class="gen-checkbox-label" for="autopic_manual_preset_enabled">
+                            <input id="autopic_manual_preset_enabled" type="checkbox" aria-controls="autopic_manual_preset_fields">
+                            <span>ST 프리셋 지시문 함께 사용</span>
+                        </label>
+                        <p class="ap-help">켜면 수동 생성 지시문과 선택한 프리셋 항목은 기본으로 System, 대상 본문과 장면 요청은 User로 보냅니다.</p>
+                        <div id="autopic_manual_preset_fields" hidden>
+                            <div class="ap-manual-preset-grid">
+                                <label for="autopic_manual_preset_name">ST 프리셋
+                                    <select id="autopic_manual_preset_name" class="gen-custom-input"></select>
+                                </label>
+                                <label for="autopic_manual_preset_item">프리셋 지시문
+                                    <select id="autopic_manual_preset_item" class="gen-custom-input"></select>
+                                </label>
+                            </div>
+                            <p class="ap-help">선택은 즉시 저장되며, 생성할 때 프리셋 항목의 현재 내용을 사용합니다.</p>
+                            <details class="ap-manual-role-settings">
+                                <summary>전송 역할 변경</summary>
+                                <div class="ap-manual-preset-grid">
+                                    <label>수동 생성 지시문
+                                        <select class="gen-custom-input" data-manual-role="instruction">
+                                            <option value="system">System</option>
+                                            <option value="user">User</option>
+                                            <option value="assistant">AI Assistant</option>
+                                        </select>
+                                    </label>
+                                    <label>선택한 ST 프리셋 지시문
+                                        <select id="autopic_manual_preset_role" class="gen-custom-input" data-manual-role="preset">
+                                            <option value="system">System</option>
+                                            <option value="user">User</option>
+                                            <option value="assistant">AI Assistant</option>
+                                        </select>
+                                    </label>
+                                    <label>대상 본문과 장면 요청
+                                        <select class="gen-custom-input" data-manual-role="task">
+                                            <option value="system">System</option>
+                                            <option value="user" selected>User</option>
+                                            <option value="assistant">AI Assistant</option>
+                                        </select>
+                                    </label>
+                                </div>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+                <div class="image-gen-card ap-template-card">
+                    <h3 class="gen-section-title">수동 생성 삽화 배치 지시문</h3>
+                    <p class="ap-help">수동 생성 창에서 고른 배치 방식의 지시문을 사용합니다. 문단 번호와 출력 형식은 자동으로 안내합니다.</p>
+                    <div class="ap-template-field">
+                        <label for="autopic_manual_placement_free">자유 배치</label>
+                        <p class="ap-help" id="autopic_manual_placement_free_help">삽화를 어느 문단 뒤에 넣을지 정하는 기준입니다. 본문에 빈 줄로 구분된 문단이 여러 개 있으면 중간에 배치할 수 있습니다.</p>
+                        <textarea id="autopic_manual_placement_free" class="gen-custom-input" rows="5" aria-describedby="autopic_manual_placement_free_help"></textarea>
+                        <div class="ap-template-actions">
+                            <button id="autopic_manual_placement_free_save" type="button" class="gen-btn gen-btn-dark">자유 배치 저장</button>
+                            <button id="autopic_manual_placement_free_reset" type="button" class="gen-btn gen-btn-dark">기본값 복원</button>
+                        </div>
+                    </div>
+                    <div class="ap-template-field">
+                        <label for="autopic_manual_placement_bottom">메시지 하단</label>
+                        <p class="ap-help" id="autopic_manual_placement_bottom_help">하단에 넣을 삽화의 순서를 정하는 기준입니다.</p>
+                        <textarea id="autopic_manual_placement_bottom" class="gen-custom-input" rows="4" aria-describedby="autopic_manual_placement_bottom_help"></textarea>
+                        <div class="ap-template-actions">
+                            <button id="autopic_manual_placement_bottom_save" type="button" class="gen-btn gen-btn-dark">하단 배치 저장</button>
+                            <button id="autopic_manual_placement_bottom_reset" type="button" class="gen-btn gen-btn-dark">기본값 복원</button>
+                        </div>
+                    </div>
+                </div>
+            </details>
+            <div class="image-gen-card" id="character_prompts_section">
+                <div class="ap-character-prompt-header">
+                    <h3 class="gen-section-title">👤 캐릭터 외형 프롬프트</h3>
+                    <div class="ap-character-prompt-actions">
+                        <button id="export_char_prompts_btn" type="button" class="gen-btn gen-btn-dark ap-character-file-button" title="JSON 내보내기" aria-label="JSON 내보내기" disabled><i class="fa-solid fa-file-export" aria-hidden="true"></i></button>
+                        <button id="import_char_prompts_btn" type="button" class="gen-btn gen-btn-dark ap-character-file-button" title="JSON 가져오기" aria-label="JSON 가져오기" disabled><i class="fa-solid fa-file-import" aria-hidden="true"></i></button>
+                        <button id="add_char_prompt_btn" type="button" class="gen-btn gen-btn-dark"><i class="fa-solid fa-plus" aria-hidden="true"></i> 추가</button>
+                    </div>
+                </div>
+                <p class="ap-help">등록된 캐릭터는 <code>&lt;apchar ref="이름"&gt;</code>으로 불러옵니다. 토글을 끄면 해당 캐릭터는 비활성화됩니다. 각 캐릭터의 기본 의상은 아래에서 입력하고, 이를 반영하는 공통 지시문은 위 옷차림 템플릿에서 수정하세요.</p>
+                <input id="autopic_character_prompt_file" type="file" accept=".json,application/json" hidden>
+                <div id="char_prompts_list" style="display:flex; flex-direction:column; gap:15px;"></div>
+                <p class="ap-help"><code>{autopic_charN}</code>은 구버전 템플릿용입니다. 활성화한 캐릭터의 외형 프롬프트로 치환됩니다.</p>
+            </div>
+        </div>
 
-		<div id="tab-gen-linking" class="image-gen-tab-content">
+        <div id="tab-gen-linking" class="image-gen-tab-content">
 			<div class="image-gen-card">
 				<h3 class="gen-section-title">🔗 캐릭터별 프롬프트 연동</h3>
 				<p style="font-size: 0.85rem; color: var(--ap-text-vague); margin-bottom: 15px; line-height: 1.4;">
@@ -568,6 +646,40 @@
 
 #autopic_settings_container .image-gen-tab-content { display: none; }
 #autopic_settings_container .image-gen-tab-content.active { display: block; animation: fadeInGen 0.3s ease-out; }
+#autopic_settings_container #tab-gen-templates textarea.gen-custom-input { width: 100%; max-width: 100%; box-sizing: border-box; }
+#autopic_settings_container .ap-template-disclosure { margin-bottom: 20px; }
+#autopic_settings_container .ap-template-disclosure > summary {
+    display: list-item;
+    padding: 12px 16px;
+    border: 1px solid var(--ap-border);
+    border-radius: 10px;
+    background: var(--ap-bg-card);
+    color: var(--ap-text);
+    font-weight: 600;
+    cursor: pointer;
+}
+#autopic_settings_container .ap-template-disclosure[open] > summary { margin-bottom: 12px; }
+#autopic_settings_container .ap-template-disclosure > .image-gen-card:last-child { margin-bottom: 0; }
+#autopic_settings_container .ap-template-card > .gen-section-title { margin: 0 0 6px; }
+#autopic_settings_container .ap-template-card .ap-help { margin: 0; line-height: 1.6; }
+#autopic_settings_container .ap-template-card textarea.gen-custom-input { display: block; margin: 14px 0 0; }
+#autopic_settings_container .ap-template-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+#autopic_settings_container .ap-character-prompt-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+#autopic_settings_container .ap-character-prompt-header > .gen-section-title { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+#autopic_settings_container .ap-character-prompt-actions { display: flex; flex: 0 0 auto; flex-wrap: nowrap; align-items: center; gap: 6px; white-space: nowrap; }
+#autopic_settings_container .ap-character-prompt-actions > .gen-btn { flex: 0 0 auto; box-sizing: border-box; min-height: 36px; padding: 6px 9px; }
+#autopic_settings_container .ap-character-prompt-actions > .ap-character-file-button { width: 36px; padding: 0; }
+#autopic_settings_container .ap-template-field { margin-top: 20px; }
+#autopic_settings_container .ap-template-field + .ap-template-field { margin-top: 24px; }
+#autopic_settings_container .ap-template-field > label { display: block; margin: 0 0 4px; font-weight: 600; }
+#autopic_settings_container .ap-manual-preset { border-top: 1px solid var(--ap-border); padding-top: 14px; }
+#autopic_settings_container .ap-manual-preset > .gen-checkbox-label { display: flex; }
+#autopic_settings_container .ap-manual-preset [hidden] { display: none !important; }
+#autopic_settings_container .ap-manual-preset-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 8px; }
+#autopic_settings_container .ap-manual-preset-grid > label { flex: 1 1 10rem; min-width: 0; }
+#autopic_settings_container .ap-manual-preset select { display: block; width: 100%; margin-top: 4px; }
+#autopic_settings_container .ap-manual-role-settings { margin-top: 12px; }
+#autopic_settings_container .ap-manual-role-settings > summary { display: list-item; cursor: pointer; }
 @keyframes fadeInGen { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @media screen and (max-width: 500px) {
     #autopic_settings_container .flex-container.flexnowrap { flex-wrap: wrap !important; gap: 8px !important; }

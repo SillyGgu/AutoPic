@@ -1,4 +1,13 @@
 // Instructions only: never truncate user prompts or weighted tag expressions in code.
+export const OUTFIT_PROMPT = `ATTIRE AND ACCESSORIES:
+- <apchar_outfit> is a clothing reference, not appearance. Read it as attire and worn accessories only: shirt, coat, skirt, shoes, hat, necklace, glasses, etc.
+- Ignore physical traits accidentally written in outfit references: real horns, animal ears, tails, wings, hair, eye color, skin, anatomy and species are NOT attire/accessories. Never move them into clothing tags. A worn horned headband is an accessory; actual horns are anatomy.
+- Adapt only clothing/accessories to the current scene. Do not copy the outfit reference wholesale.
+- Put each character's clothing and worn accessories as short English tags in that character's <apchar> block. Keep permanent appearance separate.`;
+export function buildOutfitPrompt(template = OUTFIT_PROMPT) {
+    const text = String(template ?? '').trim();
+    return text ? `\n\n<autopic_outfit_rules>\nFor clothing selection, adaptation and output, the following user-editable rules take precedence over other clothing guidance in the template.\n${text}\n</autopic_outfit_rules>` : '';
+}
 const rules = `
 TAG FORMAT:
 - Use familiar English NovelAI/Danbooru-style tags, comma-separated. No prose, sentences, dialogue, metaphors, explanations, or invented descriptive phrases.
@@ -22,6 +31,37 @@ const example = `<autopic>
 <apchar ref="Bob">sitting, looking down, open shirt, necklace</apchar>
 <uc>blurry, watermark, text</uc>
 </autopic>`;
+const manualInstructions = `You create illustrations for a selected chat message. Do not continue the roleplay or explain your answer.
+${rules}
+Follow the requested illustration count. Each illustration must show a different moment, action, or composition, never duplicate the same scene for alternate samples.
+If a scene request is provided, prioritize it over automatic scene selection. Otherwise choose suitable scenes from TARGET.
+Use only the supplied context; do not assume later conversation. Registered appearance is added by AutoPic.
+Output only the requested number of complete <autopic> blocks, with <scene>, <apchar> and optional <uc> inside each.`;
+const manualExample = `<autopic>
+<scene>1girl, cafe, sunset</scene>
+<apchar ref="Alice">sitting, smiling, white shirt</apchar>
+</autopic>`;
+export const MANUAL_GENERATION_PROMPT = `${manualInstructions}
+Example of the block contents:
+${manualExample}`;
+export const PREVIOUS_FREE_PLACEMENT_PROMPT = 'Match each illustration to the TARGET paragraph where its depicted moment happens. Insert it immediately after that paragraph, before the story moves on. For multiple illustrations, choose different matching paragraphs when possible and keep them in story order. Use the final paragraph only for a scene that belongs at the end.';
+export const MANUAL_PLACEMENT_PROMPTS = Object.freeze({
+    free: `For each illustration, choose the TARGET paragraph that best supports its visual tags. Use that paragraph's exact ID in the opening tag, e.g. <autopic after="p2"> if p2 is listed.
+
+- Match by visible action, pose, interaction, or setting. If several paragraphs fit equally well, choose the earliest one that shows the full scene.
+- For multiple illustrations, prefer different matching paragraphs. Use the same paragraph only if it is the best match for each scene.
+- Use the final paragraph only when it best matches the scene or is the only available paragraph.
+- Return only the requested <autopic> blocks with image tags. Do not rewrite the story, add narration, or explain your choices.`,
+    bottom: `Place all illustrations together at the end of the target message. Order them by when their scenes happen in the story.`,
+});
+// Migrate only the exact previous built-in text; preserve user-edited manual templates.
+export const LEGACY_MANUAL_GENERATION_PROMPT = `${manualInstructions}
+For free placement, add after="pN" to each <autopic> opening tag, using an exact paragraph ID from TARGET. This means insert after that paragraph. Never rewrite TARGET.
+For bottom placement, use after="bottom". Example:
+${manualExample.replace('<autopic>', '<autopic after="p1">')}`;
+export const PREVIOUS_MANUAL_GENERATION_PROMPT = LEGACY_MANUAL_GENERATION_PROMPT.replace(
+    'Output only the requested number',
+    'An outfit override replaces that character\'s default clothing reference for this request only. Adapt it to the request; never treat anatomy as clothing.\nOutput only the requested number');
 export const STRUCTURED_BLOCKS_PROMPT = `<image_generation>
 When an image is appropriate, append exactly one <autopic> block after the story. Keep the story outside this block.
 ${rules}

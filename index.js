@@ -1,14 +1,21 @@
 import { createAutopicId } from './id.mjs';
-import { STRUCTURED_BLOCKS_PROMPT, STRICT_TAG_BLOCKS_PROMPT } from './prompt-templates.mjs';
-import { requestManualPrompt } from './manual-prompt.mjs';
-import { slotIds, slotRecord, reserveSlot, writeSlot, renderSlots, clearSlotPrompts, pruneSlots, configureSlotProtection, slotSubscription } from './image-slots.mjs';
+import { parseCharacterPromptFile, serializeCharacterPrompts } from './character-prompt-file.mjs';
+import {
+    STRUCTURED_BLOCKS_PROMPT, STRICT_TAG_BLOCKS_PROMPT, MANUAL_GENERATION_PROMPT,
+    LEGACY_MANUAL_GENERATION_PROMPT, PREVIOUS_MANUAL_GENERATION_PROMPT, MANUAL_PLACEMENT_PROMPTS, PREVIOUS_FREE_PLACEMENT_PROMPT,
+    OUTFIT_PROMPT, buildOutfitPrompt,
+} from './prompt-templates.mjs';
+import { composeManualPrompt, requestManualPrompt } from './manual-prompt.mjs';
+import { bindManualPresetSelection, showManualGenerationOptions } from './manual-ui.mjs';
+import { removeManualArtifacts, hasManualArtifacts, manualParagraphs, manualContext, parseManualPlan, insertManualIllustrations } from './manual-generation.mjs';
+import { slotMarkup, slotIds, slotRecord, reserveSlot, writeSlot, renderSlots, clearSlotPrompts, pruneSlots, configureSlotProtection, slotSubscription } from './image-slots.mjs';
 import * as ST_MEDIA from '../../../constants.js';
 import { gallerySources, selectedGallerySource, recoverGalleryRecords, syncGalleryMedia } from './gallery.mjs';
 import { parseAutopic } from './structured-prompt.mjs';
 import { imageKey, rememberImage, imageRecord, resolveRecord, migrateImageRecords, pruneImageRecords, clearImageRecords } from './image-records.mjs';
 import { extension_settings, getContext } from '../../../extensions.js';
 import {
-    generateQuietPrompt,
+    generateRaw,
     saveSettingsDebounced,
     eventSource,
     event_types,
@@ -17,10 +24,10 @@ import {
     getRequestHeaders,
 } from '../../../../script.js';
 import { appendMediaToMessage } from '../../../../script.js';
-import { regexFromString, saveBase64AsFile } from '../../../utils.js';
+import { download, regexFromString, saveBase64AsFile } from '../../../utils.js';
 import { isDirect, syncCharacterPositionVisibility, bindDirectSettings, refreshDirectSettings, generateDirect, readMetadataBuffer } from './nai-direct.mjs';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
-import { callGenericPopup, POPUP_TYPE } from '../../../popup.js';
+import { callGenericPopup, POPUP_RESULT, POPUP_TYPE } from '../../../popup.js';
 import { ConnectionManagerRequestService } from '../../shared.js';
 
 
@@ -237,7 +244,9 @@ const MANUAL_DEFAULTS = {
     enabled: true,
     profileId: '',
     maxTokens: 700,
+    template: MANUAL_GENERATION_PROMPT,
 };
+let manualGenerationBusy = false;
 
 function getNaiParams() {
     const s = extension_settings[extensionName];
@@ -254,7 +263,17 @@ function getManualParams() {
     for (const [k, v] of Object.entries(MANUAL_DEFAULTS)) {
         if (s.manualGeneration[k] === undefined) s.manualGeneration[k] = v;
     }
+    if ([LEGACY_MANUAL_GENERATION_PROMPT, PREVIOUS_MANUAL_GENERATION_PROMPT].includes(s.manualGeneration.template)) {
+        s.manualGeneration.template = MANUAL_GENERATION_PROMPT;
+    }
+    if (s.manualGeneration.placementTemplates?.free === PREVIOUS_FREE_PLACEMENT_PROMPT) {
+        s.manualGeneration.placementTemplates.free = MANUAL_PLACEMENT_PROMPTS.free;
+    }
     return s.manualGeneration;
+}
+
+function getOutfitPrompt() {
+    return buildOutfitPrompt(extension_settings[extensionName].outfitPromptTemplate ?? OUTFIT_PROMPT);
 }
 // ─────────────────────────────────────────────────────────────
 
@@ -800,6 +819,7 @@ const defaultAutoPicSettings = {
     characterPrompts: {},
     naiParams: { ...NAI_DEFAULTS },
     manualGeneration: { ...MANUAL_DEFAULTS },
+    outfitPromptTemplate: OUTFIT_PROMPT,
 };
 
 const STRUCTURED_BLOCKS_PROMPT_VERSION = 7;
@@ -868,6 +888,12 @@ function updateUI() {
         $('#autopic_manual_enabled').prop('checked', !!manual.enabled);
         $('#autopic_manual_profile').val(manual.profileId || '');
         $('#autopic_manual_max_tokens').val(manual.maxTokens);
+        if (!$('#autopic_manual_template').is(':focus')) $('#autopic_manual_template').val(manual.template);
+        for (const [placement, defaultPrompt] of Object.entries(MANUAL_PLACEMENT_PROMPTS)) {
+            const editor = $(`#autopic_manual_placement_${placement}`);
+            if (!editor.is(':focus')) editor.val(manual.placementTemplates?.[placement] ?? defaultPrompt);
+        }
+        if (!$('#autopic_outfit_template').is(':focus')) $('#autopic_outfit_template').val(extension_settings[extensionName].outfitPromptTemplate ?? OUTFIT_PROMPT);
 
 
         $('.theme-dot').removeClass('active');
@@ -1051,6 +1077,10 @@ async function createSettings(settingsHtml) {
 
     $('#autopic_settings_container').empty().append(settingsHtml);
     localizeSettingsLabels();
+    bindCharacterPromptFiles();
+    bindManualPresetSelection(document.getElementById('autopic_manual_preset'), {
+        getManualParams, getContext, save: saveSettingsDebounced,
+    });
 
 
     $(document).off('click', '.image-gen-nav-item').on('click', '.image-gen-nav-item', function() {
@@ -1107,6 +1137,45 @@ async function createSettings(settingsHtml) {
         getManualParams().maxTokens = Number.isFinite(value) && value > 0 ? value : MANUAL_DEFAULTS.maxTokens;
         saveSettingsDebounced();
     });
+    $('#autopic_manual_template_save').on('click', () => {
+        const value = String($('#autopic_manual_template').val() || '').trim();
+        if (!value) return toastr.warning('수동 생성 지시문을 입력해 주세요.');
+        getManualParams().template = value;
+        saveSettingsDebounced();
+        toastr.success('수동 생성 전용 지시문을 저장했습니다.');
+    });
+    $('#autopic_manual_template_reset').on('click', () => {
+        getManualParams().template = MANUAL_GENERATION_PROMPT;
+        $('#autopic_manual_template').val(MANUAL_GENERATION_PROMPT);
+        saveSettingsDebounced();
+    });
+    $('#autopic_outfit_template_save').on('click', () => {
+        extension_settings[extensionName].outfitPromptTemplate = String($('#autopic_outfit_template').val() || '').trim();
+        saveSettingsDebounced();
+        toastr.success('옷차림 프롬프트 템플릿을 저장했습니다.');
+    });
+    $('#autopic_outfit_template_reset').on('click', () => {
+        extension_settings[extensionName].outfitPromptTemplate = OUTFIT_PROMPT;
+        $('#autopic_outfit_template').val(OUTFIT_PROMPT);
+        saveSettingsDebounced();
+    });
+    for (const [placement, defaultPrompt] of Object.entries(MANUAL_PLACEMENT_PROMPTS)) {
+        const id = `#autopic_manual_placement_${placement}`;
+        $(id + '_save').on('click', () => {
+            const prompt = String($(id).val() || '').trim();
+            if (!prompt) return toastr.warning('삽화 배치 지시문을 입력해 주세요.');
+            const manual = getManualParams();
+            manual.placementTemplates = { ...manual.placementTemplates, [placement]: prompt };
+            saveSettingsDebounced();
+            toastr.success('삽화 배치 지시문을 저장했습니다.');
+        });
+        $(id + '_reset').on('click', () => {
+            const manual = getManualParams();
+            manual.placementTemplates = { ...manual.placementTemplates, [placement]: defaultPrompt };
+            $(id).val(defaultPrompt);
+            saveSettingsDebounced();
+        });
+    }
 
     $('#prompt_injection_text').on('input', function () {
         const currentVal = $(this).val();
@@ -1718,19 +1787,92 @@ function renderVibeImageList() {
     });
 }
 
-function renderCharacterPrompts() {
-
-    if ($('#char_prompts_list textarea:focus').length > 0) return;
-
+function getCharacterPromptOwner() {
     const context = getContext();
-    const charId = context.characterId ?? (characters.findIndex(c => c.avatar === context.character?.avatar));
+    const charId = context.characterId ?? characters.findIndex(c => c.avatar === context.character?.avatar);
+    return characters[charId];
+}
+
+function bindCharacterPromptFiles() {
+    const input = document.getElementById('autopic_character_prompt_file');
+    if (!input) return;
+    let owner;
+    let importing = false;
+
+    $('#export_char_prompts_btn').on('click', () => {
+        const character = getCharacterPromptOwner();
+        if (!character) return;
+        const entries = extension_settings[extensionName].characterPrompts?.[character.avatar] ?? [];
+        try {
+            const name = (character.name || 'character').replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+            download(serializeCharacterPrompts(entries), `${name}-autopic-prompts.json`, 'application/json');
+        } catch (error) {
+            toastr.error(error.message);
+        }
+    });
+
+    $('#import_char_prompts_btn').on('click', () => {
+        if (importing) return;
+        owner = getCharacterPromptOwner();
+        if (owner) input.click();
+    });
+    input.addEventListener('change', async () => {
+        const file = input.files?.[0];
+        input.value = '';
+        if (!file || !owner || importing) return;
+        const { avatar, name } = owner;
+        const assertOwner = () => {
+            if (getCharacterPromptOwner()?.avatar !== avatar) throw new Error('캐릭터가 바뀌었습니다. 해당 캐릭터를 선택해 다시 가져와 주세요.');
+        };
+        importing = true;
+        try {
+            const entries = parseCharacterPromptFile(await file.text());
+            assertOwner();
+            const currentEntries = extension_settings[extensionName].characterPrompts?.[avatar] ?? [];
+            const before = JSON.stringify(currentEntries);
+            const message = document.createElement('div');
+            message.textContent = `${name || avatar}에 프롬프트 ${entries.length}개를 가져옵니다. 기존 ${currentEntries.length}개 뒤에 추가하거나 기존 목록을 교체할 수 있습니다.`;
+            const choice = await callGenericPopup(message, POPUP_TYPE.CONFIRM, '', {
+                okButton: false,
+                cancelButton: '취소',
+                defaultResult: POPUP_RESULT.NEGATIVE,
+                customButtons: [
+                    { text: '기존 목록에 추가', result: POPUP_RESULT.CUSTOM1 },
+                    { text: '기존 목록 교체', result: POPUP_RESULT.CUSTOM2 },
+                ],
+            });
+            if (choice !== POPUP_RESULT.CUSTOM1 && choice !== POPUP_RESULT.CUSTOM2) return;
+            assertOwner();
+            const table = extension_settings[extensionName].characterPrompts ??= {};
+            const current = table[avatar] ?? [];
+            if (choice === POPUP_RESULT.CUSTOM2 && JSON.stringify(current) !== before) {
+                throw new Error('기존 목록이 바뀌었습니다. 파일을 다시 선택해 주세요.');
+            }
+            table[avatar] = choice === POPUP_RESULT.CUSTOM1 ? [...current, ...entries] : entries;
+            saveSettingsDebounced();
+            renderCharacterPrompts({ force: true });
+            toastr.success(`캐릭터 외형 프롬프트 ${entries.length}개를 가져왔습니다.`);
+        } catch (error) {
+            toastr.error(error.message);
+        } finally {
+            importing = false;
+        }
+    });
+}
+
+function renderCharacterPrompts({ force = false } = {}) {
+
+    if (!force && $('#char_prompts_list textarea:focus').length > 0) return;
+
+    const character = getCharacterPromptOwner();
     const $list = $('#char_prompts_list');
     
     if (!$list.length) return;
 
     $list.empty();
 
-    if (charId === undefined || charId === -1 || !characters[charId]) {
+    $('#export_char_prompts_btn, #import_char_prompts_btn').prop('disabled', !character);
+    if (!character) {
         $list.append('<div style="text-align:center; color:var(--ap-text-vague); font-size:0.8rem; padding: 20px;">캐릭터를 먼저 선택하거나 채팅을 시작해주세요.</div>');
         $('#add_char_prompt_btn').addClass('gen-btn-disabled').prop('disabled', true);
         return;
@@ -1738,7 +1880,7 @@ function renderCharacterPrompts() {
     
     $('#add_char_prompt_btn').removeClass('gen-btn-disabled').prop('disabled', false);
 
-    const avatarFile = characters[charId].avatar;
+    const avatarFile = character.avatar;
     
     if (!extension_settings[extensionName].characterPrompts) {
         extension_settings[extensionName].characterPrompts = {};
@@ -1765,9 +1907,9 @@ function renderCharacterPrompts() {
                 </div>
                 <div style="display:flex; flex-direction:column; gap:8px;">
                     <input class="gen-custom-input char-name-input" data-index="${index}" value="${escapeHtmlAttribute(item.name || '')}" placeholder="Reference name for &lt;apchar ref=&quot;name&quot;&gt;">
-                    <textarea class="gen-custom-input char-prompt-input" data-index="${index}" rows="2" placeholder="캐릭터 외형 프롬프트 (AI는 못 봄)" style="resize: vertical;">${item.prompt || ''}</textarea>
-                    <textarea class="gen-custom-input char-clothing-input" data-index="${index}" rows="1" placeholder="의상·착용 장신구만 — 뿔·머리색·신체 특징 제외 (AI가 읽음)" style="resize: vertical;">${item.clothing || ''}</textarea>
-                    <textarea class="gen-custom-input char-uc-input" data-index="${index}" rows="1" placeholder="캐릭터 UC (선택사항)" style="resize: vertical;">${item.uc || ''}</textarea>
+                    <textarea class="gen-custom-input char-prompt-input" data-index="${index}" rows="2" placeholder="캐릭터 외형 프롬프트 (AI는 못 봄)" style="resize: vertical;">${escapeHtmlAttribute(item.prompt || '')}</textarea>
+                    <textarea class="gen-custom-input char-clothing-input" data-index="${index}" rows="1" placeholder="의상·착용 장신구만 — 뿔·머리색·신체 특징 제외 (AI가 읽음)" style="resize: vertical;">${escapeHtmlAttribute(item.clothing || '')}</textarea>
+                    <textarea class="gen-custom-input char-uc-input" data-index="${index}" rows="1" placeholder="캐릭터 UC (선택사항)" style="resize: vertical;">${escapeHtmlAttribute(item.uc || '')}</textarea>
                     <div class="ap-character-position" hidden>
                         <span>직접 생성 위치 <small>0–1</small></span>
                         <div class="ap-coordinate-fields">
@@ -2096,7 +2238,7 @@ function buildAvailableCharacterRefsPrompt(charData) {
         return `- ${item.name}`;
     });
 
-    return `\n\n<autopic_registered_characters>\nThese are the only valid ref names for <apchar ref=\"...\">. Use a ref only when the exact name is listed before the '|' symbol. <apchar_outfit> contains attire and worn accessories only. Ignore any horns, ears, tails, wings, hair, eyes, skin or anatomy in it; physical traits are not clothing. Adapt the clothing instead of copying this reference verbatim.\n${lines.join('\n')}\n</autopic_registered_characters>`;
+    return `\n\n<autopic_registered_characters>\nThese are the only valid ref names for <apchar ref=\"...\">. Use a ref only when the exact name is listed before the '|' symbol.\n${lines.join('\n')}\n</autopic_registered_characters>`;
 }
 
 function getFinalPrompt() {
@@ -2133,13 +2275,15 @@ function getFinalPrompt() {
         }
     }
 
-    return finalPrompt;
+    return finalPrompt + getOutfitPrompt();
 }
 
 eventSource.on(
     event_types.CHAT_COMPLETION_PROMPT_READY,
     async function (eventData) {
         try {
+            // Raw manual requests already carry their own template and selected context.
+            if (eventData.chat?.some(item => typeof item.content === 'string' && item.content.includes('<autopic_manual_task>'))) return;
             if (!extension_settings[extensionName]?.promptInjection?.enabled || 
                 extension_settings[extensionName].insertType === INSERT_TYPE.DISABLED) {
                 return;
@@ -3120,136 +3264,184 @@ function stripAutopicRuntimeMarkup(text) {
         .trim();
 }
 
-function getManualContextText(mesId) {
-    const context = getContext();
-    const chat = context.chat || [];
-    const targetIndex = Number(mesId);
-    const start = Math.max(0, targetIndex - 4);
-    const end = Math.min(chat.length - 1, targetIndex + 1);
-    const lines = [];
-
-    for (let i = start; i <= end; i++) {
-        const message = chat[i];
-        if (!message) continue;
-        const speaker = message.is_user ? 'User' : (message.name || 'Assistant');
-        const marker = i === targetIndex ? ' [TARGET]' : '';
-        const text = stripAutopicRuntimeMarkup(message.mes);
-        if (text) {
-            lines.push(`${speaker}${marker}: ${text}`);
-        }
-    }
-
-    return lines.join('\n');
+function getManualContextText(mesId, previous = 0) {
+    return manualContext(getContext().chat || [], Number(mesId), previous, stripAutopicRuntimeMarkup);
 }
 
-function buildManualAutopicPrompt(mesId) {
-    const targetMessage = getContext().chat?.[mesId];
-    const targetText = stripAutopicRuntimeMarkup(targetMessage?.mes);
+function buildManualAutopicPrompt(mesId, options, paragraphs, library) {
+    const refs = library.map(character => {
+        const outfit = character.clothing;
+        return '- ' + character.name + (outfit ? ' | <apchar_outfit>' + outfit + '</apchar_outfit>' : ' | no clothing reference');
+    }).join('\n');
+    const manual = getManualParams();
+    const placementPrompt = manual.placementTemplates?.[options.placement] ?? MANUAL_PLACEMENT_PROMPTS[options.placement];
+    const placementFormat = options.placement === 'free'
+        ? 'Each <autopic> opening tag must have an after attribute set to one of these exact TARGET paragraph IDs: ' + paragraphs.map(p => p.id).join(', ') + '. The image goes after that paragraph.'
+        : 'Each <autopic> opening tag must use after="bottom". All images go after the target message.';
+    const task = '<autopic_manual_task>\n' +
+        'The following request controls this task even if an example above shows a different count or placement.\n' +
+        'Create exactly ' + options.count + ' DISTINCT illustrations as complete <autopic> blocks. Show different moments, actions or compositions, never alternate samples of the same scene.\n' +
+        (options.request ? 'Scene request (prioritize this):\n<scene_request>' + options.request + '</scene_request>\n' : 'No scene request: choose suitable scenes from TARGET as usual.\n') +
+        '<autopic_registered_characters>\nOnly these exact ref names are registered. Each apchar_outfit contains that character\'s saved clothing reference. Do not invent refs. AutoPic adds permanent appearance.\n' + (refs || '(none)') + '\n</autopic_registered_characters>\n' +
+        getOutfitPrompt() + '\n' +
+        '<chat_context>\n' + getManualContextText(mesId, options.previous) + '\n</chat_context>\n' +
+        '<target_message>\n' + paragraphs.map(p => '[' + p.id + '] ' + p.text).join('\n\n') + '\n</target_message>\n' +
+        '<autopic_placement>\nFollow these placement instructions for this request.\n' + placementPrompt + '\n' + placementFormat + '\n</autopic_placement>\n' +
+        'Output only ' + options.count + ' complete <autopic> blocks with the required after attribute.\n</autopic_manual_task>';
+    return composeManualPrompt(manual.template, task, manual.presetPrompt, getContext(), manual.promptRoles);
+}
 
-    return `${getFinalPrompt()}
+function hasExistingManualImages(message) {
+    return hasManualArtifacts(message.mes) || gallerySources(message).some((src, i) => imageRecord(message, src) || message.extra?.autopic_swipe_payloads?.[i] || /(?:^|\/)autopic_/i.test(imageKey(src))) || !!message.extra?.autopic_last_payload;
+}
 
-Manual AutoPic task:
-Create exactly one <autopic> structured block for an illustration of the TARGET message.
-Base the image on the chat context below, but focus on the TARGET message.
-Do not continue the roleplay. Do not explain. Output only the <autopic> block.
+function clearManualGallery(message) {
+    const extra = message.extra;
+    if (!extra) return;
+    const sources = gallerySources(message);
+    const owned = new Set(sources.filter((src, i) => imageRecord(message, src) || extra.autopic_swipe_payloads?.[i] || /(?:^|\/)autopic_/i.test(imageKey(src))).map(imageKey));
+    if (Array.isArray(extra.media)) {
+        const selected = selectedGallerySource(message);
+        extra.media = extra.media.filter(item => !owned.has(imageKey(item.url)));
+        extra.media_index = Math.max(0, extra.media.findIndex(item => item.url === selected));
+    } else {
+        const keep = sources.filter(src => !owned.has(imageKey(src)));
+        extra.image_swipes = keep;
+        extra.autopic_swipe_payloads = keep.map(src => imageRecord(message, src) ? {image:imageKey(src)} : null);
+        if (owned.has(imageKey(extra.image))) {
+            if (keep.length) extra.image = keep[0];
+            else { delete extra.image; delete extra.inline_image; delete extra.title; }
+        }
+    }
+    delete extra.autopic_last_payload;
+}
 
-<chat_context>
-${getManualContextText(mesId)}
-</chat_context>
+function syncManualTranslation(message, oldText, newText, paragraphs, items, options) {
+    const extra = message.extra;
+    for (const field of ['display_text', 'original_translation_backup']) {
+        if (typeof extra[field] !== 'string') continue;
+        if (extra[field] === oldText) { extra[field] = newText; continue; }
+        const text = options.mode === 'replace' ? removeManualArtifacts(extra[field]) : extra[field];
+        const translated = manualParagraphs(text, stripAutopicRuntimeMarkup);
+        // A translation may merge paragraphs. Preserve its text and place images at the bottom then.
+        const mapped = translated.length === paragraphs.length ? items : items.map(item => ({...item, after:'bottom'}));
+        extra[field] = insertManualIllustrations(text, translated, mapped);
+    }
+    if (typeof extra.original_text_for_translation === 'string') extra.original_text_for_translation = newText;
+}
 
-<target_message>
-${targetText}
-</target_message>`;
+function captureAutopicTextTarget(context, message) {
+    const { chat, chatId } = context;
+    const rawSwipeId = message.swipe_id;
+    const swipeId = Number(rawSwipeId ?? 0);
+    const text = message.mes;
+    const savedText = message.swipes?.[swipeId];
+
+    return {
+        text,
+        swipeId,
+        isCurrent(mesId) {
+            const current = getContext();
+            if (current.chat !== chat || current.chatId !== chatId) return false;
+            if (mesId === undefined ? !chat.includes(message) : chat[mesId] !== message) return false;
+            if (message.swipe_id !== rawSwipeId || message.mes !== text) return false;
+            if (!Number.isInteger(swipeId) || swipeId < 0) return false;
+
+            const swipes = message.swipes;
+            if (swipes?.[swipeId] !== savedText) return false;
+            // ST can select the next swipe before its text has been generated.
+            if (!Array.isArray(swipes) || swipes.length === 0) return swipeId === 0;
+            return (rawSwipeId != null || swipes.length === 1) && typeof savedText === 'string';
+        },
+    };
 }
 
 async function handleManualGenerate(mesId) {
+    if (manualGenerationBusy) { toastr.info('이미 수동 생성창이 열려 있거나 생성 중입니다.'); return; }
     if (!isDirect(getNaiParams()) && !SlashCommandParser.commands['sd']) {
-        toastr.error("Stable Diffusion extension not loaded.");
+        toastr.error('Stable Diffusion extension not loaded.');
         return;
     }
-
-    const context = getContext();
-    const numericMesId = Number(mesId);
-    const message = context.chat?.[numericMesId];
-    const manual = getManualParams();
-
+    const context = getContext(), message = context.chat?.[Number(mesId)];
     if (!message || message.is_user) return;
-
+    manualGenerationBusy = true;
+    const target = captureAutopicTextTarget(context, message);
+    const { text: oldText, swipeId } = target;
+    const assertCurrent = () => {
+        if (!target.isCurrent()) throw new Error('답변이 바뀌었거나 아직 생성 중이라 수동 생성을 중단했습니다. 생성이 끝난 답변에서 다시 시도해 주세요.');
+    };
     try {
-        toastr.info('AutoPic 수동 생성 프롬프트 작성 중...');
-        const generatedText = await requestManualPrompt({
-            profileId: manual.profileId,
-            prompt: buildManualAutopicPrompt(numericMesId),
-            maxTokens: Number(manual.maxTokens) || MANUAL_DEFAULTS.maxTokens,
-            generateQuietPrompt,
-            profileService: ConnectionManagerRequestService,
+        assertCurrent();
+        const library = getCurrentAutopicCharacterPromptsForNai();
+        const manual = getManualParams();
+        const existing = hasExistingManualImages(message);
+        const selectedOptions = await showManualGenerationOptions({existing, lastOptions:manual.lastOptions, popup:callGenericPopup, popupType:POPUP_TYPE.CONFIRM, warn:text => toastr.warning(text)});
+        if (!selectedOptions) return;
+        assertCurrent();
+        const { mode, ...preferences } = selectedOptions;
+        manual.lastOptions = { ...manual.lastOptions, ...preferences, ...(existing ? { mode } : {}) };
+        saveSettingsDebounced();
+
+        const options = { ...selectedOptions };
+        const baseText = options.mode === 'replace' ? removeManualArtifacts(oldText) : oldText;
+        const paragraphs = manualParagraphs(baseText, stripAutopicRuntimeMarkup);
+        if (!paragraphs.length && options.placement === 'free') options.placement = 'bottom';
+        toastr.info('AutoPic 수동 생성: 장면별 프롬프트 작성 중...');
+        const generatedText = await requestManualPrompt({profileId:manual.profileId,
+            prompt:buildManualAutopicPrompt(context.chat.indexOf(message), options, paragraphs, library),
+            maxTokens:(Number(manual.maxTokens) || MANUAL_DEFAULTS.maxTokens) * options.count,
+            generateRaw, profileService:ConnectionManagerRequestService});
+        assertCurrent();
+        const plan = parseManualPlan(generatedText, options.count, paragraphs, options.placement, text => {
+            const parsed = parseAutopic(decodeHtmlAttribute(text), library, decodeHtmlAttribute);
+            return {prompt:parsed?.prompt || '', naiPayload:parsed, editText:text};
         });
-        const prepared = preparePromptForGeneration(generatedText);
-
-        if (!prepared.naiPayload) {
-            console.warn('[AutoPic] Manual generation did not return a structured block:', generatedText);
-            toastr.error('수동 생성 결과에서 올바른 <autopic> 블록을 찾지 못했습니다.');
-            return;
+        const completed = [];
+        let failure;
+        for (let i = 0; i < plan.length; i++) {
+            assertCurrent();
+            toastr.info('AutoPic 삽화 생성 중... (' + (i+1) + '/' + plan.length + ')');
+            try {
+                const item = plan[i];
+                const src = await sdCallWithRescale({quiet:'true'}, item.prepared.prompt, item.prepared.naiPayload);
+                if (typeof src !== 'string' || !src.trim() || src.startsWith('Error')) throw new Error('이미지 생성에 실패했습니다.');
+                completed.push({...item, src});
+            } catch (error) { failure = error; break; }
         }
-
-        toastr.info('AutoPic 이미지 생성 중...');
-        if (useImageSlots()) {
-            const slot = reserveSlot(message, null, prepared.editText || prepared.prompt);
-            updateMessageBlock(numericMesId, message);
-            await context.saveChat();
-            await generateImageSlot(context, message, slot, prepared);
-            return;
-        }
-        const resultUrl = await sdCallWithRescale(
-            { quiet: 'true' },
-            prepared.prompt,
-            prepared.naiPayload,
-        );
-
-        if (typeof resultUrl !== 'string' || !resultUrl.trim() || resultUrl.startsWith('Error')) {
-            toastr.error('수동 이미지 생성에 실패했습니다.');
-            return;
-        }
-
-        if (!message.extra) message.extra = {};
-        if (!Array.isArray(message.extra.image_swipes)) message.extra.image_swipes = [...gallerySources(message)];
-        if (!Array.isArray(message.extra.autopic_swipe_payloads)) message.extra.autopic_swipe_payloads = [];
-
-        const storedPayload = buildStoredAutopicPayload(prepared, message, resultUrl);
-        message.extra.autopic_last_payload = storedPayload;
-
-        const currentInsertType = extension_settings[extensionName].insertType;
-        if (currentInsertType === INSERT_TYPE.REPLACE) {
-            const titleForTag = prepared.editText || prepared.prompt || '';
-            const newTag = createAutopicImageTag(resultUrl, titleForTag, 'manual', message);
-            message.mes = replaceFirstAutopicImageOrAppend(message.mes, newTag);
-            if (Array.isArray(message.swipes)) message.swipes[getCurrentTextSwipeId(message)] = message.mes;
-        } else {
-            message.extra.image_swipes.push(resultUrl);
-            message.extra.autopic_swipe_payloads.push(storedPayload);
-            message.extra.image = resultUrl;
-            message.extra.title = isDirect(getNaiParams()) ? 'AutoPic' : prepared.editText;
-            message.extra.inline_image = true;
-        }
-
-        if (currentInsertType !== INSERT_TYPE.REPLACE) syncGalleryMedia(message, resultUrl, null, ST_MEDIA);
-        updateMessageBlock(numericMesId, message);
-        appendMediaToMessage(message, $(`.mes[mesid="${numericMesId}"]`));
-        if (currentInsertType !== INSERT_TYPE.REPLACE) {
-            observeAutopicMessageControls(numericMesId);
-            addRerollButtonToMessage(numericMesId);
-            scheduleInlineGalleryControlRefresh(numericMesId, [0, 50, 150, 350]);
+        assertCurrent();
+        if (!completed.length) throw failure || new Error('완성된 삽화가 없습니다.');
+        // Commit only after success: failed requests never remove existing illustrations.
+        message.extra ??= {};
+        if (options.mode === 'replace') clearManualGallery(message);
+        const slots = extension_settings[extensionName].translationCompatibility === 'slots';
+        const items = completed.map(item => {
+            if (slots) { const id = createAutopicId(); return {...item, id, markup:slotMarkup(id)}; }
+            return {...item, markup:createAutopicImageTag(item.src, item.prepared.editText, 'manual', message)};
+        });
+        const newText = insertManualIllustrations(baseText, paragraphs, items);
+        syncManualTranslation(message, oldText, newText, paragraphs, items, options);
+        message.mes = newText;
+        if (typeof message.swipes?.[swipeId] === 'string') message.swipes[swipeId] = newText;
+        for (const item of items) {
+            if (slots) writeSlot(message, item.id, {src:item.src, editText:item.prepared.editText});
+            else message.extra.autopic_last_payload = {image:imageKey(item.src)};
         }
         cleanMessageImageRecords(message);
+        if (message.swipe_info?.[swipeId]) message.swipe_info[swipeId].extra = structuredClone(message.extra);
+        const index = context.chat.indexOf(message);
+        updateMessageBlock(index, message);
+        appendMediaToMessage(message, $('.mes[mesid="' + index + '"]'));
+        renderMessageSlots(index);
         await context.saveChat();
-        await eventSource.emit(event_types.MESSAGE_UPDATED, numericMesId);
-        await eventSource.emit(event_types.MESSAGE_RENDERED, numericMesId);
-
-        toastr.success('AutoPic 수동 이미지 생성 완료.');
+        await eventSource.emit(event_types.MESSAGE_UPDATED, index);
+        await eventSource.emit(event_types.MESSAGE_RENDERED, index);
+        refreshAutopicMessageControls(index);
+        if (failure) toastr.warning(items.length + '/' + plan.length + '개를 저장했습니다. 나머지는 생성하지 못했습니다: ' + (failure.message || failure));
+        else toastr.success('AutoPic 삽화 ' + items.length + '개 생성 완료');
     } catch (error) {
         console.error('[AutoPic] Manual generation failed:', error);
         toastr.error(error?.message || 'AutoPic 수동 생성 중 오류가 발생했습니다.');
-    }
+    } finally { manualGenerationBusy = false; }
 }
 
 async function handleReroll(mesId, currentPrompt, targetAutopicId = null, targetImageSrc = null, targetSwipeIdxHint = null, targetTextSwipeIdHint = null, targetSlotId = null) {
@@ -3265,6 +3457,15 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
     const message = context.chat[mesId];
     if (!message) return;
     targetSlotId ??= /^slot-([a-zA-Z0-9-]+)$/.exec(targetAutopicId)?.[1] || null;
+    const target = captureAutopicTextTarget(context, message);
+    const { text: initialText, swipeId: rerollSwipeId } = target;
+    function canUpdateRerollTarget() {
+        // Slots resolve their owning swipe by marker when the image completes.
+        if (targetSlotId || target.isCurrent(mesId)) return true;
+        toastr.warning('텍스트 답변이 바뀌었거나 아직 생성 중이라 삽화 리롤을 적용하지 않았습니다. 해당 답변에서 다시 시도해 주세요.');
+        return false;
+    }
+    if (!canUpdateRerollTarget()) return;
     if (!targetSlotId) {
         recoverGalleryRecords(message);
         migrateImageRecords(message);
@@ -3274,7 +3475,7 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
     const picRegex = /<pic[^>]*\sprompt="([^"]*)"[^>]*?>/gi;
     const imgRegex = /<img[^>]+>/gi;
     const hasTargetImageSrc = !!targetImageSrc;
-    const hintedTextSwipeId = Number(targetTextSwipeIdHint);
+    const hintedTextSwipeId = targetTextSwipeIdHint == null ? null : Number(targetTextSwipeIdHint);
     const textSwipePayloads = Number.isInteger(hintedTextSwipeId)
         ? getAutopicTextSwipePayloads(message, hintedTextSwipeId)
         : [];
@@ -3282,9 +3483,15 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
     let foundItems = [];
     const sourceRecord = targetSlotId ? slotRecord(message, targetSlotId) : targetImageSrc && imageRecord(message, targetImageSrc);
     if (targetSlotId && !sourceRecord?.editText) { toastr.warning('이 슬롯의 생성 원문이 없습니다.'); return; }
+    const clickedImageTag = getAutopicImageTagById(initialText, targetAutopicId)
+        || getAutopicImageTagBySrc(initialText, targetImageSrc);
+    if (targetAutopicId && !targetSlotId && !clickedImageTag) {
+        toastr.warning('현재 답변에서 선택한 삽화를 찾지 못했습니다. 이미지가 표시된 답변에서 다시 시도해 주세요.');
+        return;
+    }
     if (sourceRecord) {
         const prepared = preparePromptForGeneration(sourceRecord.editText);
-        const tag = getAutopicImageTagById(message.mes, targetAutopicId) || getAutopicImageTagBySrc(message.mes, targetImageSrc);
+        const tag = clickedImageTag;
         foundItems.push({ slotId: targetSlotId, originalTag: tag, prompt: prepared.editText, _parsedNaiPayload: prepared.naiPayload,
             _parsedPrompt: prepared.prompt, targetImageSrc, targetAutopicId, preventGlobalFallback: true,
             type: targetSlotId || tag ? 'tag' : 'swipe', swipeIdx: (() => { const i = gallerySources(message).findIndex(src => imageKey(src) === imageKey(targetImageSrc)); return i >= 0 ? i : undefined; })() });
@@ -3320,8 +3527,6 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
         });
     }
 
-    const clickedImageTag = getAutopicImageTagById(message.mes, targetAutopicId)
-        || getAutopicImageTagBySrc(message.mes, targetImageSrc);
     if (clickedImageTag && !foundItems.length) {
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = clickedImageTag;
@@ -3419,7 +3624,7 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
     const imageSwipes = gallerySources(message);
     const swipeCandidateCount = Math.max(imageSwipes.length, savedSwipePayloads.length);
     const normalizedTargetImageSrc = normalizeImageSwipeSrc(targetImageSrc);
-    const hintedSwipeIdx = Number(targetSwipeIdxHint);
+    const hintedSwipeIdx = targetSwipeIdxHint == null ? null : Number(targetSwipeIdxHint);
     const targetSwipeIdxFromHint = Number.isInteger(hintedSwipeIdx) && hintedSwipeIdx >= 0 && hintedSwipeIdx < swipeCandidateCount
         ? hintedSwipeIdx
         : -1;
@@ -3542,7 +3747,7 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
     $(document).off('change.autopicPopup', '.reroll_radio');
     $(document).off('input.autopicPopup', '.reroll_textarea');
 
-    if (result) {
+    if (result && canUpdateRerollTarget()) {
         const finalPrompt = editedPrompts[selectedIdx];
 		const targetItem = foundItems[selectedIdx];
 		const reparsedFinalPrompt = resolveRerollGenerationPrompt(finalPrompt, targetItem, message, currentPrompt);
@@ -3570,6 +3775,7 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
                     generationPrompt.prompt,
                     generationPrompt.naiPayload,
                 );
+                if (!canUpdateRerollTarget()) return;
                 
                 if (typeof resultUrl === 'string' && !resultUrl.startsWith('Error')) {
                     const currentInsertType = extension_settings[extensionName].insertType;
@@ -3622,7 +3828,9 @@ async function handleReroll(mesId, currentPrompt, targetAutopicId = null, target
                         message.extra.inline_image = true;
                     }
 
-                    if (currentInsertType === INSERT_TYPE.REPLACE && Array.isArray(message.swipes)) message.swipes[getCurrentTextSwipeId(message)] = message.mes;
+                    if (currentInsertType === INSERT_TYPE.REPLACE && typeof message.swipes?.[rerollSwipeId] === 'string') {
+                        message.swipes[rerollSwipeId] = message.mes;
+                    }
                     if (currentInsertType !== INSERT_TYPE.REPLACE) syncGalleryMedia(message, resultUrl, null, ST_MEDIA);
                     updateMessageBlock(mesId, message);
                     if (currentInsertType === INSERT_TYPE.REPLACE) {

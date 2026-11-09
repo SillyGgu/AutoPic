@@ -1,4 +1,14 @@
 /* AutoPic's theme tokens, existing Font Awesome icons, and native form controls. */
+.ap-manual-dialog { text-align: left; width: 100%; min-width: 0; }
+.ap-manual-dialog h3 { margin: 0 0 20px; }
+.ap-manual-dialog .ap-manual-field { display: flex; flex-direction: column; gap: 8px; margin: 0 0 18px; font-weight: 600; min-width: 0; }
+.ap-manual-dialog small, .ap-manual-dialog p { font-size: .85em; font-weight: 400; opacity: .75; line-height: 1.6; }
+.ap-manual-dialog :is(input[type=number], textarea, select) { box-sizing: border-box; width: 100%; min-width: 0; padding: 10px; border: 1px solid var(--SmartThemeBorderColor, #555); border-radius: 8px; background: var(--black30a, #202024); color: inherit; font: inherit; }
+.ap-manual-dialog textarea { resize: vertical; line-height: 1.6; }
+.ap-manual-dialog .ap-manual-grid { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(0, 2fr); gap: 16px; }
+.ap-manual-dialog .ap-manual-existing { padding: 14px; border: 1px solid var(--SmartThemeBorderColor, #555); border-radius: 10px; }
+.ap-manual-dialog :focus-visible { outline: 2px solid var(--SmartThemeQuoteColor, #4a90e2); outline-offset: 2px; }
+@media (max-width: 480px) { .ap-manual-dialog .ap-manual-grid { grid-template-columns: 1fr; gap: 0; } }
 #autopic_settings_container .ap-studio {
     container-type: inline-size;
     padding: 22px;
